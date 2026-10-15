@@ -79,7 +79,7 @@ Not for you if you only need a quick VPN on a network that does not block VPNs
 [Hardening and panel access](docs/HARDENING.md) · [Security model](docs/SECURITY-MODEL.md) ·
 [Clients](docs/CLIENTS.md) · [Dynamic IP](docs/DYNAMIC-IP.md) · [Backup and restore](docs/BACKUP.md) ·
 [Upgrading](docs/UPGRADING.md) · [Monitoring](docs/MONITORING.md) · [DNS migration](docs/DNS-MIGRATION.md) ·
-[Runbook](docs/RUNBOOK.md) · [FAQ](docs/FAQ.md) · [Legal](docs/LEGAL.md)
+[Reality target](docs/REALITY-TARGET.md) · [Runbook](docs/RUNBOOK.md) · [FAQ](docs/FAQ.md) · [Legal](docs/LEGAL.md)
 
 ## Layout
 

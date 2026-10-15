@@ -185,6 +185,12 @@ expect "a stopped service on the Pi is critical" 1 "nginx is NOT active"
 reset_remote; FAKE_SSH_DOWN=1; export FAKE_SSH_DOWN; rrun
 expect "SSH down skips host checks with a warning" 0 "cannot SSH"
 reset_remote
+printf 'CASAVPN_DOMAIN=vpn.example.com\n' >"$T/notarget.env"
+OUT="$(env PATH="$BIN:$PATH" CASAVPN_ENV="$T/notarget.env" "$HC" 2>&1)"; RC=$?
+expect "no Reality target anywhere is a usage error, not a default" 2 "No Reality target"
+OUT="$(env PATH="$BIN:$PATH" CASAVPN_ENV="$T/notarget.env" "$HC" --sni www.example.net 2>&1)"; RC=$?
+expect "--sni supplies the target when the env file has none" 0 "genuine www.example.net certificate"
+reset_remote
 OUT="$(env PATH="$BIN:$PATH" CASAVPN_ENV="$T/test.env" "$HC" 2>&1)"; RC=$?
 expect "without an SSH target the host checks are skipped, loudly" 0 "no --ssh target"
 said "  ...and DNS correctness is called UNVERIFIED" "UNVERIFIED"

@@ -32,7 +32,7 @@ lacks() { # <name> <pattern>
 
 good_env() { # <file> [extra lines...]
   local f="$1"; shift
-  { printf 'CASAVPN_DOMAIN=vpn.example.com\nCASAVPN_LAN_CIDR=192.168.0.0/24\nCASAVPN_ADMIN_USER=alice\n'; printf '%s\n' "$@"; } >"$f"
+  { printf 'CASAVPN_DOMAIN=vpn.example.com\nCASAVPN_LAN_CIDR=192.168.0.0/24\nCASAVPN_ADMIN_USER=alice\nCASAVPN_REALITY_TARGET=www.example.net\n'; printf '%s\n' "$@"; } >"$f"
 }
 
 echo "install.sh --dry-run"
@@ -69,6 +69,14 @@ bad_env() { # <name> <pattern> <extra lines...>
   OUT="$("$INSTALL" --dry-run --env "$T/bad.env" 2>&1)"; RC=$?
   expect "$name" 1 "$pat"
 }
+{ printf 'CASAVPN_DOMAIN=vpn.example.com\nCASAVPN_REALITY_TARGET=\n'; } >"$T/notarget.env"
+OUT="$("$INSTALL" --dry-run --env "$T/notarget.env" 2>&1)"; RC=$?
+expect "an empty Reality target is refused" 1 "CASAVPN_REALITY_TARGET is empty"
+expect "  ...with a pointer to the doc" 1 "docs/REALITY-TARGET.md"
+bad_env "a Reality target that is not a hostname is rejected" "CASAVPN_REALITY_TARGET is not a hostname" 'CASAVPN_REALITY_TARGET=bad host'
+good_env "$T/port.env" CASAVPN_VPN_PORT=4443
+OUT="$("$INSTALL" --dry-run --env "$T/port.env" 2>&1)"; RC=$?
+expect "a non-443 VPN port is allowed but warned about" 0 "not 443"
 bad_env "a hostname without a dot is rejected" "CASAVPN_DOMAIN is not a hostname" CASAVPN_DOMAIN=localhost
 { printf 'CASAVPN_LAN_CIDR=192.168.0.0/24\n'; } >"$T/nodomain.env"
 OUT="$("$INSTALL" --dry-run --env "$T/nodomain.env" 2>&1)"; RC=$?
@@ -120,7 +128,9 @@ expect "no settings file: creates it from the example and stops" 3 "Created $FRE
 yes "  ...a copy of the example" cmp -s "$FRESH" "$ROOT/casavpn.env.example"
 perm="$(stat -c %a "$FRESH" 2>/dev/null || stat -f %Lp "$FRESH")"
 yes "  ...mode 0600" test "$perm" = 600
-echo "CASAVPN_DOMAIN=mine.example.org" >>"$FRESH"
+OUT="$(PATH="$T/bin:$PATH" "$INSTALL" --env "$FRESH" --dry-run 2>&1)"; RC=$?
+expect "the example alone does not pass: the Reality target must be chosen" 1 "CASAVPN_REALITY_TARGET is empty"
+{ echo "CASAVPN_DOMAIN=mine.example.org"; echo "CASAVPN_REALITY_TARGET=www.example.net"; } >>"$FRESH"
 OUT="$(PATH="$T/bin:$PATH" "$INSTALL" --env "$FRESH" --dry-run 2>&1)"; RC=$?
 expect "an existing settings file is never overwritten" 0 "mine.example.org"
 yes "  ...and still holds the edit" grep -q "mine.example.org" "$FRESH"

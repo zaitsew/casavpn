@@ -46,6 +46,8 @@ sudo nano /etc/casavpn/casavpn.env
 ```
 
 Fill in at least `CASAVPN_DOMAIN`, `CASAVPN_LAN_CIDR`, `CASAVPN_ADMIN_USER`,
+`CASAVPN_REALITY_TARGET` (no default: the installer refuses to run without it, see
+[REALITY-TARGET.md](REALITY-TARGET.md) for how to choose and check one),
 `CF_API_TOKEN` and `CF_ZONE_ID`. Also set `AGE_RECIPIENT` (see
 [BACKUP.md](BACKUP.md), step 1: do it now, a VPN without a restorable backup is
 a weekend lost) and optionally `NTFY_URL`. Every key is documented in the file.
@@ -102,7 +104,7 @@ Forward **only** these two TCP ports to `<LAN_IP>`:
 
 | External | Internal | What |
 |---|---|---|
-| 443 | 443 | the VPN |
+| 443 | 443 | the VPN (keep it on 443: [why](REALITY-TARGET.md#keep-the-vpn-port-on-443)) |
 | 8443 | 8443 | client subscriptions |
 
 Do not forward SSH (22), the panel ports (2053, 2096), or port 80. Certificates

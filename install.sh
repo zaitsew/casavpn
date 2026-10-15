@@ -188,12 +188,14 @@ preflight() {
     if [ "$DRY_RUN" = 1 ]; then
       warn "$ENV_FILE does not exist; planning with the values in casavpn.env.example"
       ENV_FILE="$HERE/casavpn.env.example"
+      PLAN_FROM_EXAMPLE=1
     else
       act install -d -m 0755 "$(dirname "$ENV_FILE")"
       act install -m 0600 -o root "$HERE/casavpn.env.example" "$ENV_FILE"
       log ""
       log "Created $ENV_FILE from the example. Edit it (at least CASAVPN_DOMAIN,"
-      log "CASAVPN_LAN_CIDR and CASAVPN_ADMIN_USER), then run install.sh again."
+      log "CASAVPN_LAN_CIDR, CASAVPN_ADMIN_USER and CASAVPN_REALITY_TARGET: see"
+      log "docs/REALITY-TARGET.md for how to choose the last one), then run install.sh again."
       exit 3
     fi
   fi
@@ -204,6 +206,10 @@ preflight() {
   fi
   load_env "$ENV_FILE"
   apply_defaults
+  if [ "${PLAN_FROM_EXAMPLE:-0}" = 1 ] && [ -z "$CASAVPN_REALITY_TARGET" ]; then
+    CASAVPN_REALITY_TARGET=www.example.net
+    warn "planning with the placeholder Reality target www.example.net; a real install needs your own choice (docs/REALITY-TARGET.md)"
+  fi
   validate_env
   ok "settings are valid for $CASAVPN_DOMAIN (LAN $CASAVPN_LAN_CIDR, VPN port $CASAVPN_VPN_PORT, web port $CASAVPN_WEB_PORT)"
 

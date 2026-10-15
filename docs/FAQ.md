@@ -47,10 +47,11 @@ strangers with the real camouflage site. 8443 serves the subscription URLs and t
 
 ## Which site should I use as the Reality target?
 
-The default `www.apple.com` is a placeholder that works for many networks, not a
-recommendation for yours. Pick a large site that serves TLS 1.3 and HTTP/2, that
-your network does not block, and that the Pi can reach. See
-[ARCHITECTURE.md](ARCHITECTURE.md#reality-parameters-that-must-match-on-both-ends).
+There is deliberately no default, and the installer refuses to run without one: a
+shared default is a fingerprint, and Xray itself warns about the famous choices.
+Pick a site that serves TLS 1.3 and HTTP/2 directly on 443, is near your server and
+is not one of the big well-known defaults. How to check a candidate:
+[REALITY-TARGET.md](REALITY-TARGET.md).
 
 ## Can I use it without Cloudflare?
 

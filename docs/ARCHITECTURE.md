@@ -26,7 +26,7 @@ connection (a scanner, a prober, a curious ISP) has its TLS handshake relayed to
 the real site and sees that site's genuine certificate. You can check:
 
 ```bash
-echo | openssl s_client -connect vpn.example.com:443 -servername www.apple.com 2>/dev/null \
+echo | openssl s_client -connect vpn.example.com:443 -servername www.example.net 2>/dev/null \
   | grep -E 'subject=|Verify return code'
 ```
 
@@ -83,15 +83,13 @@ capture `x-ui.db`, not `config.json`.
 |---|---|
 | Network / security | `tcp` / `reality` |
 | Flow | `xtls-rprx-vision` (set on the client too, or the connection stalls) |
-| SNI and target | `CASAVPN_REALITY_TARGET` (default `www.apple.com`) |
+| SNI and target | `CASAVPN_REALITY_TARGET` (no default; you choose it) |
 | Fingerprint | `chrome` |
 | Public key, short ID | from the panel; clients receive the public half only |
 
-Choosing a target: a popular site that speaks TLS 1.3 and HTTP/2, is not blocked
-by the network you are evading, is reachable from the host, and is not itself
-behind a CDN-only restriction. If you move the host to another network, re-check
-the choice. The default is a placeholder that satisfies those for most places, not
-a recommendation tailored to yours.
+Choosing the target matters and has no default: see
+[REALITY-TARGET.md](REALITY-TARGET.md) for what makes a good one, how to check a
+candidate, and why the VPN port should stay 443.
 
 ## Dynamic IP
 

@@ -13,7 +13,7 @@
 #   --ssh <user@host>  the Pi, for host checks (default CASAVPN_SSH_TARGET)
 #   --vpn-port <n>     Reality port           (default CASAVPN_VPN_PORT, 443)
 #   --web-port <n>     subscription port      (default CASAVPN_WEB_PORT, 8443)
-#   --sni <name>       Reality camouflage     (default CASAVPN_REALITY_TARGET)
+#   --sni <name>       Reality camouflage     (required unless CASAVPN_REALITY_TARGET is set)
 #   --env <file>       settings file          (default /etc/casavpn/casavpn.env)
 #   -h, --help
 #
@@ -61,7 +61,7 @@ DOMAIN="${DOMAIN_ARG:-$(env_get CASAVPN_DOMAIN)}"
 SSH_TARGET="${SSH_ARG:-$(env_get CASAVPN_SSH_TARGET)}"
 VPN_PORT="${VPN_PORT_ARG:-$(env_get CASAVPN_VPN_PORT)}"; VPN_PORT="${VPN_PORT:-443}"
 WEB_PORT="${WEB_PORT_ARG:-$(env_get CASAVPN_WEB_PORT)}"; WEB_PORT="${WEB_PORT:-8443}"
-SNI="${SNI_ARG:-$(env_get CASAVPN_REALITY_TARGET)}"; SNI="${SNI:-www.apple.com}"
+SNI="${SNI_ARG:-$(env_get CASAVPN_REALITY_TARGET)}"
 PANEL_PORT="$(env_get CASAVPN_PANEL_PORT)"; PANEL_PORT="${PANEL_PORT:-2053}"
 SUB_PORT="$(env_get CASAVPN_SUB_PORT)"; SUB_PORT="${SUB_PORT:-2096}"
 MIN_VER="$(env_get CASAVPN_MIN_CLIENT_VER)"; MIN_VER="${MIN_VER:-1.8.0}"
@@ -70,6 +70,12 @@ LE_DIR="${CASAVPN_LE_DIR:-/etc/letsencrypt/live}"
 BACKUP_DEST="${CASAVPN_BACKUP_DEST:-$(env_get CASAVPN_BACKUP_DEST)}"; BACKUP_DEST="${BACKUP_DEST:-/var/backups/casavpn}"
 
 [ -n "$DOMAIN" ] || { echo "No hostname: pass --host or set CASAVPN_DOMAIN in $ENV_FILE." >&2; exit 2; }
+# The camouflage check needs the site Reality imitates. There is no default: a
+# shared default would be a fingerprint (docs/REALITY-TARGET.md).
+if [ "$LOCAL" = 0 ] && [ -z "$SNI" ]; then
+  echo "No Reality target: pass --sni <site> or set CASAVPN_REALITY_TARGET in $ENV_FILE (docs/REALITY-TARGET.md)." >&2
+  exit 2
+fi
 
 # --- output -------------------------------------------------------------------
 fails=0; warns=0

@@ -21,6 +21,7 @@ The first public version, generalised from a private home deployment.
 - `monitor/`: external uptime monitor on a Cloudflare Worker.
 - `tools/pii-scan.py` and `check.sh`: the local gate (there is no CI).
 - Documentation in `docs/`.
+- `CASAVPN_REALITY_TARGET` has no default: `install.sh` and the settings validation refuse an empty value, the healthcheck needs `--sni` or the setting, and `docs/REALITY-TARGET.md` explains how to choose and check a site. The VPN port stays 443 by default and a different one is warned about.
 
 ### Verified
 

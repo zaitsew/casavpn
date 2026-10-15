@@ -96,7 +96,7 @@ A connect, a little data and a FIN within a second or two is a **Reality handsha
 mismatch**, not a network fault. Confirm the server first:
 
 ```bash
-echo | openssl s_client -connect vpn.example.com:443 -servername www.apple.com 2>/dev/null \
+echo | openssl s_client -connect vpn.example.com:443 -servername www.example.net   # your CASAVPN_REALITY_TARGET 2>/dev/null \
   | grep -E 'subject=|Verify return code'
 ```
 

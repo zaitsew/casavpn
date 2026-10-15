@@ -59,7 +59,8 @@ apply_defaults() {
   : "${CASAVPN_SUB_PORT:=2096}"
   : "${CASAVPN_LAN_CIDR:=192.168.0.0/24}"
   : "${CASAVPN_ADMIN_USER:=pi}"
-  : "${CASAVPN_REALITY_TARGET:=www.apple.com}"
+  # No default on purpose: a shared default site is a fingerprint (docs/REALITY-TARGET.md).
+  : "${CASAVPN_REALITY_TARGET:=}"
   : "${CASAVPN_MIN_CLIENT_VER:=1.8.0}"
   : "${CASAVPN_DDNS_PROVIDER:=cloudflare}"
   : "${CASAVPN_ACME_STAGING:=0}"
@@ -102,7 +103,9 @@ validate_env() {
   done
   if [ "$CASAVPN_VPN_PORT" = "$CASAVPN_WEB_PORT" ]; then complain "CASAVPN_VPN_PORT and CASAVPN_WEB_PORT must differ"; fi
   if [ "$CASAVPN_PANEL_PORT" = "$CASAVPN_SUB_PORT" ]; then complain "CASAVPN_PANEL_PORT and CASAVPN_SUB_PORT must differ"; fi
-  [[ "$CASAVPN_REALITY_TARGET" =~ ^[A-Za-z0-9.-]+$ ]] || complain "CASAVPN_REALITY_TARGET is not a hostname"
+  if [ -z "$CASAVPN_REALITY_TARGET" ]; then complain "CASAVPN_REALITY_TARGET is empty: choose the site Reality imitates, see docs/REALITY-TARGET.md"
+  elif ! valid_host "$CASAVPN_REALITY_TARGET"; then complain "CASAVPN_REALITY_TARGET is not a hostname: $CASAVPN_REALITY_TARGET"; fi
+  if [ "$CASAVPN_VPN_PORT" != 443 ]; then warn "CASAVPN_VPN_PORT is $CASAVPN_VPN_PORT, not 443: Xray warns that a non-443 Reality port makes the server's IP more likely to be blocked (docs/REALITY-TARGET.md)"; fi
   [[ "$CASAVPN_MIN_CLIENT_VER" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || complain "CASAVPN_MIN_CLIENT_VER is not a version like 1.8.0"
   case "$CASAVPN_DDNS_PROVIDER" in cloudflare) ;; *) complain "CASAVPN_DDNS_PROVIDER '$CASAVPN_DDNS_PROVIDER' is unknown (cloudflare)" ;; esac
   if [ -n "$AGE_RECIPIENT" ] && ! [[ "$AGE_RECIPIENT" =~ ^age1[a-z0-9]{50,}$ ]]; then complain "AGE_RECIPIENT is not an age public key (age1...)"; fi
