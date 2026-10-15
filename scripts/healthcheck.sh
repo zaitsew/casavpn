@@ -102,6 +102,45 @@ days_until() {
   echo $(((epoch - $(date +%s)) / 86400))
 }
 
+# cert_names: the DNS names a certificate (openssl x509 -text on stdin) is valid for:
+# the Subject Alternative Names, or the CN only when there are none (RFC 6125).
+cert_names() {
+  awk '
+    /Subject Alternative Name/ { want = 1; next }
+    want { gsub(/,/, "\n"); print; want = 0; next }
+    /^[[:space:]]*Subject:/ && !subj { subj = $0 }
+    END { if (subj != "") print "SUBJECT " subj }
+  ' | awk '
+    /^SUBJECT / { s = $0; next }
+    { gsub(/^[[:space:]]+|[[:space:]]+$/, ""); if ($0 ~ /^DNS:/) { sub(/^DNS:/, ""); print; n++ } }
+    END { if (n == 0 && s != "" && match(s, /CN ?= ?[^,\/]+/)) { v = substr(s, RSTART, RLENGTH); sub(/^CN ?= ?/, "", v); print v } }
+  '
+}
+
+# name_matches <host> <name-from-certificate>: exact, or a wildcard that stands for
+# exactly one leading label ("*.example.net" matches "www.example.net", not
+# "a.b.example.net" and not "example.net").
+name_matches() {
+  local host pat suffix first
+  host="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"; pat="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
+  [ "$host" = "$pat" ] && return 0
+  case "$pat" in
+    \*.*)
+      suffix="${pat#\*}"
+      case "$host" in
+        *"$suffix") first="${host%"$suffix"}"; [ -n "$first" ] && [[ "$first" != *.* ]] && return 0 ;;
+      esac ;;
+  esac
+  return 1
+}
+
+# cert_covers <host> <names...>
+cert_covers() {
+  local host="$1" n; shift
+  for n in "$@"; do if name_matches "$host" "$n"; then return 0; fi; done
+  return 1
+}
+
 cert_days_check() { # <label> <days>
   local label="$1" days="$2"
   if [ -z "$days" ]; then warn "$label: expiry date could not be read (UNVERIFIED)"
@@ -195,7 +234,8 @@ run_local() {
 
   heading "7. Backups and disk"
   local newest
-  newest="$(find "$BACKUP_DEST" -maxdepth 1 -name 'casavpn-*.tar.zst.age' -mtime -3 2>/dev/null | head -n1)"
+  # casavpn-backup writes .tar.zst.age, or .tar.gz.age on a host without zstd.
+  newest="$(find "$BACKUP_DEST" -maxdepth 1 \( -name 'casavpn-*.tar.zst.age' -o -name 'casavpn-*.tar.gz.age' \) -mtime -3 2>/dev/null | head -n1)"
   if [ -n "$newest" ]; then pass "a backup newer than 3 days exists"
   elif [ -d "$BACKUP_DEST" ]; then fail "no backup newer than 3 days in $BACKUP_DEST"
   else warn "no backup directory $BACKUP_DEST yet"; fi
@@ -236,17 +276,21 @@ run_remote() {
   target="${dns_ip:-$DOMAIN}"
   if nc -z -G 5 "$target" "$VPN_PORT" >/dev/null 2>&1 || nc -z -w 5 "$target" "$VPN_PORT" >/dev/null 2>&1; then
     pass "TCP $target:$VPN_PORT accepts connections"
-    cert_subject="$(echo | tmo 15 openssl s_client -connect "$target:$VPN_PORT" -servername "$SNI" 2>/dev/null | grep -m1 '^subject=')"
-    verify="$(echo | tmo 15 openssl s_client -connect "$target:$VPN_PORT" -servername "$SNI" 2>/dev/null | grep -m1 'Verify return code')"
-    # "www.example.org" -> "example": the second-to-last label identifies the site.
-    local label
-    label="$(awk -F. '{ print (NF >= 2 ? $(NF-1) : $1) }' <<<"$SNI")"
-    if grep -qi "$label" <<<"$cert_subject"; then
+    local presented names_text nm
+    presented="$(echo | tmo 15 openssl s_client -connect "$target:$VPN_PORT" -servername "$SNI" 2>/dev/null)"
+    verify="$(grep -m1 'Verify return code' <<<"$presented")"
+    # The certificate must be valid FOR the SNI host: an exact or one-label wildcard
+    # match against its Subject Alternative Names, not a look-alike substring.
+    names_text="$(openssl x509 -noout -text 2>/dev/null <<<"$presented" | cert_names)"
+    cert_subject="$(tr '\n' ' ' <<<"$names_text")"
+    local -a cert_name_list=()
+    while IFS= read -r nm; do [ -z "$nm" ] || cert_name_list+=("$nm"); done <<<"$names_text"
+    if [ "${#cert_name_list[@]}" -gt 0 ] && cert_covers "$SNI" "${cert_name_list[@]}"; then
       pass "Reality camouflage healthy: serving a genuine $SNI certificate"
       if grep -q '0 (ok)' <<<"$verify"; then pass "certificate chain verifies"; else warn "chain did not verify: $verify"; fi
     else
-      fail "unexpected certificate on :$VPN_PORT: Reality may be misconfigured"
-      [ -n "$cert_subject" ] && printf '        %s\n' "$cert_subject"
+      fail "unexpected certificate on :$VPN_PORT: Reality may be misconfigured (it is not valid for $SNI)"
+      [ -n "$cert_subject" ] && printf '        certificate names: %s\n' "$cert_subject"
     fi
   else
     fail "TCP $target:$VPN_PORT unreachable: check the router port forward"

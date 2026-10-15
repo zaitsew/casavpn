@@ -113,7 +113,7 @@ The panel is not on the internet ([HARDENING.md](HARDENING.md#reaching-the-panel
 
 | From | Do |
 |---|---|
-| Home | `https://<LAN_IP>:8443/<base path>/` (accept the certificate-name warning) |
+| Home | `https://vpn.example.com:8443/<base path>/`, the name pointed at the Pi's LAN address by a hosts entry or split DNS ([HARDENING.md](HARDENING.md#reaching-the-panel-panel-access)) |
 | Away, VPN down | Tailscale address, or `ssh` over Tailscale and a tunnel |
 | Away, VPN up | the panel route, if you set it up |
 | Anywhere with SSH | `ssh -L 8080:127.0.0.1:2053 pi@<LAN_IP>` then `http://127.0.0.1:8080/<base path>/` |
@@ -126,7 +126,9 @@ sudo sqlite3 /etc/x-ui/x-ui.db "select key,value from settings where key in ('we
 sudo x-ui          # menu: reset username/password
 ```
 
-A `403` from nginx means you are not coming from loopback, the LAN or Tailscale.
+A `403` from nginx means you are not coming from loopback, the LAN or Tailscale. At home it
+usually means the name resolved to your PUBLIC address and the request hairpinned through
+the router, which is refused on purpose: use the hosts entry or split DNS.
 
 ## Playbook 6: the certificate expired or renewal fails
 
@@ -138,7 +140,8 @@ sudo journalctl -u certbot.service -n 50 --no-pager
 
 Renewal is DNS-01: it needs the Cloudflare token (`/etc/casavpn/cloudflare.ini`) to
 be valid and scoped to the zone, not an open port. A revoked or rotated token is the
-usual cause. After a renewal nginx is reloaded by the deploy hook; if you renewed by
+usual cause. After you rotate `CF_API_TOKEN` in `casavpn.env`, re-run `install.sh`: it
+rewrites `cloudflare.ini` on every run that has a token. After a renewal nginx is reloaded by the deploy hook; if you renewed by
 hand, `sudo systemctl reload nginx`.
 
 ## Playbook 7: after any power cut

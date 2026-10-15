@@ -7,17 +7,22 @@
 
 # A request without a matching server name (an IP scan, a wrong Host) gets no
 # TLS handshake at all, so scanning the bare IP reveals nothing about what runs
-# here.
+# here. The certificate is issued for @DOMAIN@, so open the panel by that name
+# (a hosts entry or split DNS pointing at this host), never by the bare LAN IP.
+#
+# HTTP/2: nginx 1.25.1+ takes "http2 on;" in the server block; older versions
+# (Debian 12 ships 1.22) need "http2" in the listen line. install.sh picks the
+# right form for the installed nginx.
 server {
-    listen @WEB_PORT@ ssl default_server;
-    listen [::]:@WEB_PORT@ ssl default_server;
+    listen @WEB_PORT@ ssl default_server@HTTP2_LISTEN@;
+    listen [::]:@WEB_PORT@ ssl default_server@HTTP2_LISTEN@;
     ssl_reject_handshake on;
 }
 
 server {
-    listen @WEB_PORT@ ssl;
-    listen [::]:@WEB_PORT@ ssl;
-    http2 on;
+    listen @WEB_PORT@ ssl@HTTP2_LISTEN@;
+    listen [::]:@WEB_PORT@ ssl@HTTP2_LISTEN@;
+    @HTTP2_ON@
     server_name @DOMAIN@;
 
     ssl_certificate     /etc/letsencrypt/live/@DOMAIN@/fullchain.pem;

@@ -65,7 +65,7 @@ check "the file is owner-only" test "$(stat -c %a "$T/links.txt" 2>/dev/null || 
 python3 "$RENDER" vpn.example.com "$T/preexisting.txt" <"$T/rows.json" >/dev/null 2>&1
 check "an existing 0644 output file ends up owner-only" test "$(stat -c %a "$T/preexisting.txt" 2>/dev/null || stat -f %Lp "$T/preexisting.txt")" = 600
 check "  ...with the links in it" test "$(grep -c '^vless://' "$T/preexisting.txt")" -eq 2
-check "  ...and no temp file left behind" test -z "$(ls -A "$T" | grep -E '^\..*\.tmp$' || true)"
+check "  ...and no temp file left behind" test -z "$(find "$T" -maxdepth 1 -name '.*.tmp' -type f)"
 # A hard link to the old file must not see the new content (renamed over, not rewritten).
 echo old >"$T/linkA.txt"; ln "$T/linkA.txt" "$T/linkB.txt"; chmod 644 "$T/linkA.txt"
 python3 "$RENDER" vpn.example.com "$T/linkA.txt" <"$T/rows.json" >/dev/null 2>&1

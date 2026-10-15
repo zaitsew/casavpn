@@ -178,6 +178,14 @@ if [[ -z "$newest_remote" ]]; then
   exit 2
 fi
 
+# A fresh NAME on the host is not a backup. The newest one must now exist locally and
+# be non-empty (an empty copy was deleted above, retention may not have removed it).
+# Without this a zero-byte remote file was "pulled", deleted, and still counted.
+if [[ ! -s "$LOCAL/$newest_remote" ]]; then
+  alert "the newest backup on the host ($newest_remote) did not arrive as a usable local copy (empty or missing after the pull). The nightly job is writing bad archives: ssh $PI journalctl -u casavpn-backup.service -n 50"
+  exit 2
+fi
+
 age_s=$(( NOW - $(stamp_to_epoch "$(stamp_of "$newest_remote")") ))
 if (( age_s > REMOTE_MAX_H * 3600 )); then
   alert "the newest backup on the host ($newest_remote) is $(human_age "$age_s") old (limit ${REMOTE_MAX_H}h). The nightly job has stopped: ssh $PI journalctl -u casavpn-backup.service -n 50"

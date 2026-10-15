@@ -113,9 +113,11 @@ if [ "$1" = "-u" ]; then echo 0; else /usr/bin/id "$@"; fi
 SH
 cat >"$T/bin/install" <<'SH'
 #!/bin/sh
-# Drop -o/-g so the test needs no root and no root group (macOS has wheel).
-args=""
-while [ $# -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; *) args="$args '$1'"; shift ;; esac; done
+# Drop -o/-g so the test needs no root and no root group (macOS has wheel), and
+# emulate GNU -D (create the leading directories) for BSD install.
+args=""; mkd=0; last=""
+while [ $# -gt 0 ]; do case "$1" in -o|-g) shift 2 ;; -D) mkd=1; shift ;; *) args="$args '$1'"; last="$1"; shift ;; esac; done
+[ "$mkd" = 0 ] || mkdir -p "$(dirname "$last")"
 eval "exec /usr/bin/install $args"
 SH
 chmod +x "$T/bin/install"
@@ -160,14 +162,190 @@ lacks  "  ...no placeholder left" "@[A-Za-z_]*@"
 show nginx-admin "$T/ok.env"
 expect "nginx admin snippet: the LAN may pass" 0 "allow 192.168.0.0/24;"
 expect "  ...everyone else is denied" 0 "deny all;"
+lacks  "  ...no placeholder left" "@[A-Za-z_]*@"
+
+echo "install.sh hairpin-NAT guard and LAN gateway"
+NETBIN="$T/netbin"; mkdir -p "$NETBIN"
+cat >"$NETBIN/ip" <<'SH'
+#!/bin/sh
+# ip -4 route show default
+[ -n "${FAKE_DEFAULT_ROUTE:-}" ] && echo "$FAKE_DEFAULT_ROUTE"
+exit 0
+SH
+chmod +x "$NETBIN/ip"
+rules_of() { grep -E '^(allow|deny)' <<<"$OUT" | tr '\n' ' '; }
+show_nets() { OUT="$(PATH="$NETBIN:$PATH" "$INSTALL" --show "$1" --env "$2" 2>/dev/null)"; RC=$?; }
+good_env "$T/lan.env" CASAVPN_LAN_CIDR=198.51.100.0/24
+FAKE_DEFAULT_ROUTE="default via 198.51.100.1 dev eth0 proto dhcp src 198.51.100.50 metric 100"; export FAKE_DEFAULT_ROUTE
+show_nets nginx-admin "$T/lan.env"
+expect "the default route's gateway is detected and denied" 0 "^deny 198.51.100.1;"
+yes "  ...before the LAN is allowed" test "$(rules_of)" = "allow 127.0.0.1; deny 198.51.100.1; allow 198.51.100.0/24; allow 100.64.0.0/10; deny all; "
+good_env "$T/gw.env" CASAVPN_LAN_CIDR=198.51.100.0/24 CASAVPN_LAN_GATEWAY=198.51.100.254
+show_nets nginx-admin "$T/gw.env"
+expect "an explicit CASAVPN_LAN_GATEWAY wins over detection" 0 "^deny 198.51.100.254;"
+lacks  "  ...and the detected one is not also used" "deny 198.51.100.1;"
+FAKE_DEFAULT_ROUTE="default via 203.0.113.1 dev wlan0"; export FAKE_DEFAULT_ROUTE
+show_nets nginx-admin "$T/lan.env"
+expect "a default route outside the LAN CIDR is not trusted as the gateway" 0 "hairpin-NAT guard is OFF"
+lacks  "  ...no deny rule for it" "^deny 203.0.113.1"
+unset FAKE_DEFAULT_ROUTE
+show_nets nginx-admin "$T/lan.env"
+expect "no detectable gateway: the rule is a loud comment, not silence" 0 "set CASAVPN_LAN_GATEWAY"
+yes "  ...allow/deny order is intact" test "$(rules_of)" = "allow 127.0.0.1; allow 198.51.100.0/24; allow 100.64.0.0/10; deny all; "
+OUT="$(PATH="$NETBIN:$PATH" "$INSTALL" --dry-run --env "$T/lan.env" 2>&1)"; RC=$?
+expect "the installer tells the user what is left when it cannot detect it" 0 "Set CASAVPN_LAN_GATEWAY to your router"
+good_env "$T/gwnone.env" CASAVPN_LAN_CIDR=198.51.100.0/24 CASAVPN_LAN_GATEWAY=none
+FAKE_DEFAULT_ROUTE="default via 198.51.100.1 dev eth0"; export FAKE_DEFAULT_ROUTE
+show_nets nginx-admin "$T/gwnone.env"
+lacks  "CASAVPN_LAN_GATEWAY=none adds no deny rule" "^deny 198"
+unset FAKE_DEFAULT_ROUTE
+bad_env "a gateway that is not an IPv4 address is rejected" "CASAVPN_LAN_GATEWAY is not an IPv4 address" CASAVPN_LAN_GATEWAY=router.local
+bad_env "a gateway octet above 255 is rejected" "CASAVPN_LAN_GATEWAY is not an IPv4 address" CASAVPN_LAN_GATEWAY=198.51.100.300
+yes "the Xray panel-route example is valid JSON" python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$ROOT/config/xray/panel-route.example.json"
+OUT="$(python3 - "$ROOT/config/xray/panel-route.example.json" <<'PY'
+import json, sys
+rules = json.load(open(sys.argv[1]))["rules"]
+print("owner-first" if rules[0].get("user") and rules[0]["outboundTag"] == "panel" else "owner-not-first")
+others = [r for r in rules[1:] if r["outboundTag"] == "blocked" and not r.get("user") and r.get("port")]
+print("guards=%d" % len(others))
+print("all-guards-after-owner" if all(rules.index(r) > 0 for r in others) else "bad-order")
+print("hostname" if any("full:vpn.example.com" in r.get("domain", []) for r in others) else "no-hostname-guard")
+print("ip" if any(r.get("ip") for r in others) else "no-ip-guard")
+PY
+)"; RC=$?
+expect "panel-route example: the owner's rule comes first" 0 "owner-first"
+expect "  ...then a blackhole guard for the hostname on the web port" 0 "hostname"
+expect "  ...and one for the public IP" 0 "^ip"
+expect "  ...guards never name a user, so they bite every other client" 0 "guards=2"
+
+echo "install.sh nginx HTTP/2 form"
+OLDBIN="$T/oldnginx"; mkdir -p "$OLDBIN"
+printf '#!/bin/sh\necho "nginx version: nginx/${FAKE_NGINX_VERSION:-1.22.1}" >&2\n' >"$OLDBIN/nginx"; chmod +x "$OLDBIN/nginx"
+show_ng() { OUT="$(PATH="$OLDBIN:$PATH" FAKE_NGINX_VERSION="$1" "$INSTALL" --show nginx --env "$T/ok.env" 2>/dev/null)"; RC=$?; }
+show_ng 1.22.1
+expect "nginx 1.22 (Debian 12): http2 goes on the listen line" 0 "listen 8443 ssl http2;"
+expect "  ...also for IPv6" 0 "listen \[::\]:8443 ssl http2;"
+lacks  "  ...and there is no 'http2 on;' directive that 1.22 rejects" "^ *http2 on;"
+show_ng 1.25.0
+expect "nginx 1.25.0 still takes the listen form" 0 "listen 8443 ssl http2;"
+show_ng 1.25.1
+expect "nginx 1.25.1 takes 'http2 on;'" 0 "^ *http2 on;"
+lacks  "  ...and no http2 on the listen line" "ssl http2;"
+show_ng 1.26.3
+expect "nginx 1.26 takes 'http2 on;'" 0 "^ *http2 on;"
+show_ng 1.9.15
+expect "an old 1.9 is the listen form" 0 "ssl http2;"
+show nginx "$T/ok.env"
+lacks  "  ...no placeholder left (whatever nginx is installed)" "@[A-Za-z_]*@"
 show sshd "$T/ok.env"
 expect "sshd: key-only" 0 "PasswordAuthentication no"
 expect "  ...no root login" 0 "PermitRootLogin no"
 expect "  ...only the admin user" 0 "AllowUsers alice"
 show fail2ban "$T/ok.env"
-expect "fail2ban: the LAN is never banned" 0 "ignoreip = 127.0.0.1/8 ::1 192.168.0.0/24"
+expect "fail2ban: only loopback is exempt by default" 0 "^ignoreip = 127.0.0.1/8 ::1$"
+lacks  "  ...the LAN can be banned" "192.168.0.0/24"
+good_env "$T/f2b.env" 'CASAVPN_FAIL2BAN_IGNOREIP=198.51.100.77, 198.51.100.78/32'
+show fail2ban "$T/f2b.env"
+expect "CASAVPN_FAIL2BAN_IGNOREIP adds exactly what was asked" 0 "^ignoreip = 127.0.0.1/8 ::1 198.51.100.77 198.51.100.78/32$"
+bad_env "an ignoreip list with junk is rejected" "CASAVPN_FAIL2BAN_IGNOREIP is not a list" 'CASAVPN_FAIL2BAN_IGNOREIP=198.51.100.77; rm -rf /'
 OUT="$("$INSTALL" --show nope --env "$T/ok.env" 2>&1)"; RC=$?
 expect "--show with an unknown name is a usage error" 2 "unknown name"
+
+echo "install.sh real runs against a scratch root (fake tools, no host changes)"
+printf '#!/bin/sh\necho "certbot $*" >>"$FAKE_CERTBOT_LOG"\nexit 0\n' >"$T/bin/certbot"; chmod +x "$T/bin/certbot"
+export FAKE_CERTBOT_LOG="$T/certbot.log"
+# The token is rotated: the credentials file certbot renews with must follow it.
+R="$T/root1"; mkdir -p "$R/etc" "$R/le"
+good_env "$T/cf-a.env" CF_API_TOKEN=tokOLDvalue CF_ZONE_ID=zone CASAVPN_ACME_AGREE_TOS=1
+real_certs() { # <env file>
+  OUT="$(PATH="$T/bin:$PATH" CASAVPN_ETC="$R/etc" CASAVPN_LE_DIR="$R/le" "$INSTALL" --env "$1" --yes \
+    --skip-packages --skip-files --skip-3xui --skip-nginx --skip-ssh --skip-firewall --skip-fail2ban --skip-timers --skip-updates 2>&1)"; RC=$?
+}
+: >"$FAKE_CERTBOT_LOG"
+real_certs "$T/cf-a.env"
+expect "first run with a token: certificate requested" 0 "certificate issued"
+yes "  ...certbot was run once" test "$(grep -c '^certbot certonly' "$FAKE_CERTBOT_LOG")" = 1
+yes "  ...cloudflare.ini holds the token" grep -qx 'dns_cloudflare_api_token = tokOLDvalue' "$R/etc/casavpn/cloudflare.ini"
+perm="$(stat -c %a "$R/etc/casavpn/cloudflare.ini" 2>/dev/null || stat -f %Lp "$R/etc/casavpn/cloudflare.ini")"
+yes "  ...mode 0600" test "$perm" = 600
+lacks  "  ...the token is never printed" "tokOLDvalue"
+mkdir -p "$R/le/live/vpn.example.com"; : >"$R/le/live/vpn.example.com/fullchain.pem"
+good_env "$T/cf-b.env" CF_API_TOKEN=tokNEWvalue CF_ZONE_ID=zone CASAVPN_ACME_AGREE_TOS=1
+: >"$FAKE_CERTBOT_LOG"
+real_certs "$T/cf-b.env"
+expect "a rotated token with a certificate already issued" 0 "already exists"
+yes "  ...cloudflare.ini now holds the NEW token" grep -qx 'dns_cloudflare_api_token = tokNEWvalue' "$R/etc/casavpn/cloudflare.ini"
+yes "  ...and not the old one" bash -c "! grep -q tokOLDvalue '$R/etc/casavpn/cloudflare.ini'"
+yes "  ...certbot was not asked for another certificate" test ! -s "$FAKE_CERTBOT_LOG"
+perm="$(stat -c %a "$R/etc/casavpn/cloudflare.ini" 2>/dev/null || stat -f %Lp "$R/etc/casavpn/cloudflare.ini")"
+yes "  ...mode still 0600" test "$perm" = 600
+chmod 0644 "$R/etc/casavpn/cloudflare.ini"
+real_certs "$T/cf-b.env"
+expect "same token again" 0 "already holds the current token"
+perm="$(stat -c %a "$R/etc/casavpn/cloudflare.ini" 2>/dev/null || stat -f %Lp "$R/etc/casavpn/cloudflare.ini")"
+yes "  ...a loosened mode is tightened back to 0600" test "$perm" = 600
+good_env "$T/cf-c.env" CF_API_TOKEN=tokNEWvalue CF_ZONE_ID=zone
+real_certs "$T/cf-c.env"
+expect "the token is also refreshed when the licence is not accepted (a cert may exist)" 0 "Subscriber Agreement"
+
+# A panel database that already exists is the truth: take its user name and base
+# path, never invent a password for it, never print one that cannot work.
+mkxdb() { # <file> <webBasePath> <username>
+  rm -f "$1"
+  sqlite3 "$1" "create table settings (id integer primary key, key text, value text); create table users (id integer primary key, username text, password text);
+    insert into settings (key, value) values ('webBasePath', '$2'), ('webPort', '2053');
+    insert into users (username, password) values ('$3', '\$2a\$10\$hashhashhash');"
+}
+mkxdb "$T/pre.db" '/oldsecretpath/' bobadmin
+mkdir -p "$T/xuidir"; printf '#!/bin/sh\nexit 0\n' >"$T/xuidir/x-ui"; chmod +x "$T/xuidir/x-ui"
+OUT="$(CASAVPN_DB="$T/pre.db" CASAVPN_PANEL_CREDS="$T/none/creds.env" CASAVPN_XUI_DIR="$T/xuidir" "$INSTALL" --dry-run --env "$T/ok.env" 2>&1)"; RC=$?
+expect "dry run with a preserved database and no credentials file" 0 "would read the user name and base path from the database"
+expect "  ...says the password cannot be recovered" 0 "password cannot be recovered"
+expect "  ...prints how to reset it" 0 "x-ui setting -username <user> -password"
+lacks  "  ...does not point at a credentials file for the password" "sudo cat"
+lacks  "  ...never prints a password line" "PANEL_PASSWORD="
+OUT="$(CASAVPN_DB="$T/pre.db" CASAVPN_PANEL_CREDS="$T/none/creds.env" "$INSTALL" --show nginx --env "$T/ok.env" 2>/dev/null)"; RC=$?
+expect "nginx is rendered for the database's base path, not an invented one" 0 "location /oldsecretpath/ {"
+expect "  ...proxying to it" 0 "proxy_pass http://127.0.0.1:2053/oldsecretpath/;"
+
+PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+python3 - "$PORT" <<'PY' &
+import socket, sys, time
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(5)
+time.sleep(60)
+PY
+LISTENER=$!
+good_env "$T/adopt.env" "CASAVPN_PANEL_PORT=$PORT"
+real_3xui() { # <db> <creds>
+  OUT="$(PATH="$T/bin:$PATH" CASAVPN_ETC="$R/etc" CASAVPN_DB="$1" CASAVPN_PANEL_CREDS="$2" CASAVPN_XUI_DIR="$T/xuidir" \
+    "$INSTALL" --env "$T/adopt.env" --yes --skip-packages --skip-files --skip-certs --skip-nginx --skip-ssh --skip-firewall --skip-fail2ban --skip-timers --skip-updates 2>&1)"; RC=$?
+}
+real_3xui "$T/pre.db" "$T/adopt1/creds.env"
+expect "real run: a preserved database is adopted" 0 "the password is NOT known"
+yes "  ...credentials file has the database's user name" grep -qx 'PANEL_USER=bobadmin' "$T/adopt1/creds.env"
+yes "  ...and its base path" grep -qx 'PANEL_BASE_PATH=oldsecretpath' "$T/adopt1/creds.env"
+yes "  ...and no invented password" bash -c "! grep -q '^PANEL_PASSWORD' '$T/adopt1/creds.env'"
+perm="$(stat -c %a "$T/adopt1/creds.env" 2>/dev/null || stat -f %Lp "$T/adopt1/creds.env")"
+yes "  ...mode 0600" test "$perm" = 600
+yes "  ...the database's base path is untouched" test "$(sqlite3 "$T/pre.db" "select value from settings where key='webBasePath';")" = "/oldsecretpath/"
+expect "  ...the end of the run explains the reset" 0 "reset it and restart the panel"
+lacks  "  ...never says to read a password from the file" "username and password are in"
+mkxdb "$T/root.db" '/' stockadmin
+real_3xui "$T/root.db" "$T/adopt2/creds.env"
+expect "real run: a stock database served at / gets a generated secret path" 0 "generated one"
+newpath="$(sed -n 's/^PANEL_BASE_PATH=//p' "$T/adopt2/creds.env")"
+yes "  ...16 hex characters in the credentials file" bash -c "[[ '$newpath' =~ ^[0-9a-f]{16}\$ ]]"
+yes "  ...and the same path set in the database" test "$(sqlite3 "$T/root.db" "select value from settings where key='webBasePath';")" = "/$newpath/"
+yes "  ...the user name kept" grep -qx 'PANEL_USER=stockadmin' "$T/adopt2/creds.env"
+kill "$LISTENER" 2>/dev/null; wait "$LISTENER" 2>/dev/null
+
+echo "install.sh printed panel URL"
+OUT="$("$INSTALL" --dry-run --env "$T/ok.env" 2>&1)"; RC=$?
+expect "the guide opens the panel by hostname" 0 "https://vpn.example.com:8443/<base path>/"
+lacks  "  ...not by a bare LAN IP URL that fails the TLS handshake" "https://<LAN_IP>"
+expect "  ...with a hosts entry or split DNS" 0 "<LAN_IP> vpn.example.com"
+expect "  ...and says a public-address request is refused on purpose" 0 "refused on purpose"
 
 echo "common.sh: load_env and the 3x-ui tarball check"
 # shellcheck source=scripts/lib/common.sh

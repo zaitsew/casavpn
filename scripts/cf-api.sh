@@ -74,7 +74,23 @@ cmd_zone_status() {
   zone_json "$1" | jq -r '"zone:        \(.name)\nid:          \(.id)\nstatus:      \(.status)\nplan:        \(.plan.name // "?")\nnameservers: \(.name_servers | join(" "))\noriginal NS: \((.original_name_servers // []) | join(" "))"'
 }
 
-records() { cf GET "/zones/$1/dns_records?per_page=500"; }
+# records <zone-id>: every DNS record of the zone as {"result":[...]}. The API pages
+# its answers (500 at most per page), so follow result_info.total_pages: stopping at
+# the first page would let ensure-grey and set-ttl report success while records on
+# later pages stay as they were. A failed page fails the whole call.
+records() {
+  local zone="$1" page=1 total=1 resp
+  {
+    while [ "$page" -le "$total" ]; do
+      resp="$(cf GET "/zones/$zone/dns_records?per_page=500&page=$page")" || exit 1
+      printf '%s\n' "$resp"
+      total="$(printf '%s' "$resp" | jq -r '.result_info.total_pages // 1' 2>/dev/null)" || total=1
+      case "$total" in ''|*[!0-9]*) total=1 ;; esac
+      [ "$total" -le 1000 ] || die "the zone reports $total pages of records: refusing to continue"
+      page=$((page + 1))
+    done
+  } | jq -c -s '{result: (map(.result // []) | add // [])}'
+}
 
 cmd_list_records() {
   local id; id="$(zone_id "$1")" || exit 1

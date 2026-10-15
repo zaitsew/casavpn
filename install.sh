@@ -112,6 +112,7 @@ XUI_DIR="${CASAVPN_XUI_DIR:-/usr/local/x-ui}"
 XUI_DB="${CASAVPN_DB:-/etc/x-ui/x-ui.db}"
 CRED_FILE="${CASAVPN_PANEL_CREDS:-$ETC/casavpn/panel-credentials.env}"
 CF_INI="$ETC/casavpn/cloudflare.ini"
+LE_DIR="${CASAVPN_LE_DIR:-/etc/letsencrypt}"
 SYSTEMD_DIR="${CASAVPN_SYSTEMD_DIR:-/etc/systemd/system}"
 
 # ======================================================================= helpers ==
@@ -129,11 +130,87 @@ install_file() {
   ok "installed $dst"
 }
 
+# nginx_http2_on_supported: 0 when "http2 on;" is understood (nginx 1.25.1+), or when
+# nginx is not installed yet (the package install brings a current one); 1 for older
+# nginx (Debian 12 ships 1.22), which wants "http2" on the listen line instead.
+nginx_http2_on_supported() {
+  local v a b c
+  v="$(nginx -v 2>&1 | sed -n 's|.*nginx/\([0-9][0-9.]*\).*|\1|p' | head -n1)" || true
+  [ -n "$v" ] || return 0
+  IFS=. read -r a b c <<<"$v"
+  a="${a:-0}"; b="${b:-0}"; c="${c:-0}"
+  if [ "$a" -gt 1 ]; then return 0; fi
+  if [ "$a" -lt 1 ]; then return 1; fi
+  if [ "$b" -gt 25 ]; then return 0; fi
+  if [ "$b" -lt 25 ]; then return 1; fi
+  [ "$c" -ge 1 ]
+}
+
+# detect_lan_gateway: the default route's next hop, if it is an IPv4 address inside the LAN.
+detect_lan_gateway() {
+  local gw
+  command -v ip >/dev/null 2>&1 || return 1
+  gw="$(ip -4 route show default 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "via") { print $(i + 1); exit } }')" || true
+  valid_ip4 "$gw" || return 1
+  in_cidr "$gw" "$CASAVPN_LAN_CIDR" || return 1
+  printf '%s' "$gw"
+}
+
+# resolve_lan_gateway: settle CASAVPN_LAN_GATEWAY (explicit, detected, or none).
+resolve_lan_gateway() {
+  case "$CASAVPN_LAN_GATEWAY" in
+    none) CASAVPN_LAN_GATEWAY=""
+          warn "CASAVPN_LAN_GATEWAY=none: the panel ACL has no hairpin-NAT guard (docs/HARDENING.md, 'Hairpin NAT')"
+          return 0 ;;
+    '') ;;
+    *) ok "LAN gateway $CASAVPN_LAN_GATEWAY (from CASAVPN_LAN_GATEWAY) is denied before the LAN is allowed"; return 0 ;;
+  esac
+  if CASAVPN_LAN_GATEWAY="$(detect_lan_gateway)"; then
+    ok "LAN gateway $CASAVPN_LAN_GATEWAY (default route) is denied before the LAN is allowed"
+  else
+    CASAVPN_LAN_GATEWAY=""
+    warn "could not detect the router's LAN address, so the panel ACL has no hairpin-NAT guard"
+    leave "Set CASAVPN_LAN_GATEWAY to your router's LAN address in $ENV_FILE and re-run install.sh, so a VPN user cannot reach the panel by hairpinning through the router (docs/HARDENING.md)."
+  fi
+}
+
+# panel_base_path: the base path from the credentials file, else from an existing
+# panel database, else a placeholder.
+panel_base_path() {
+  local b
+  b="$(panel_cred PANEL_BASE_PATH 2>/dev/null || true)"
+  [ -n "$b" ] || b="$(xui_db_base_path 2>/dev/null || true)"
+  [ -n "$b" ] || b="panel-path-set-at-install"
+  printf '%s' "$b"
+}
+
+# xui_db_base_path / xui_db_user: read-only lookups in an existing panel database.
+xui_db_base_path() {
+  local v
+  [ -r "$XUI_DB" ] && command -v sqlite3 >/dev/null 2>&1 || return 1
+  v="$(sqlite3 "$XUI_DB" "select value from settings where key='webBasePath' limit 1;" 2>/dev/null)" || return 1
+  v="${v#/}"; v="${v%/}"
+  [[ "$v" =~ ^[A-Za-z0-9._~-]+$ ]] || return 1
+  printf '%s' "$v"
+}
+xui_db_user() {
+  local v
+  [ -r "$XUI_DB" ] && command -v sqlite3 >/dev/null 2>&1 || return 1
+  v="$(sqlite3 "$XUI_DB" "select username from users order by id limit 1;" 2>/dev/null)" || return 1
+  [[ "$v" =~ ^[A-Za-z0-9._@-]+$ ]] || return 1
+  printf '%s' "$v"
+}
+
 # render <template>: the template with its @TOKENS@ filled in, on stdout.
 render() {
-  local f="$1" base_path out
-  base_path="$(panel_cred PANEL_BASE_PATH 2>/dev/null || true)"
-  [ -n "$base_path" ] || base_path="panel-path-set-at-install"
+  local f="$1" base_path out gw_rule http2_listen http2_on ignore_extra
+  base_path="$(panel_base_path)"
+  if [ -n "$CASAVPN_LAN_GATEWAY" ]; then gw_rule="deny $CASAVPN_LAN_GATEWAY;"
+  else gw_rule="# no LAN gateway address known: set CASAVPN_LAN_GATEWAY (hairpin-NAT guard is OFF)"; fi
+  if nginx_http2_on_supported; then http2_listen=""; http2_on="http2 on;"
+  else http2_listen=" http2"; http2_on="# nginx < 1.25.1: http2 is on the listen lines above"; fi
+  ignore_extra="$(printf '%s' "$CASAVPN_FAIL2BAN_IGNOREIP" | tr ',' ' ' | tr -s ' ' | sed -e 's/^ //' -e 's/ $//')"
+  [ -z "$ignore_extra" ] || ignore_extra=" $ignore_extra"
   out="$(sed \
     -e "s|@DOMAIN@|$CASAVPN_DOMAIN|g" \
     -e "s|@VPN_PORT@|$CASAVPN_VPN_PORT|g" \
@@ -142,6 +219,10 @@ render() {
     -e "s|@PANEL_PORT@|$CASAVPN_PANEL_PORT|g" \
     -e "s|@SUB_PORT@|$CASAVPN_SUB_PORT|g" \
     -e "s|@LAN_CIDR@|$CASAVPN_LAN_CIDR|g" \
+    -e "s|@LAN_GATEWAY_RULE@|$gw_rule|g" \
+    -e "s|@HTTP2_LISTEN@|$http2_listen|g" \
+    -e "s|@HTTP2_ON@|$http2_on|g" \
+    -e "s|@IGNOREIP_EXTRA@|$ignore_extra|g" \
     -e "s|@ADMIN_USER@|$CASAVPN_ADMIN_USER|g" \
     -e "s|@PANEL_BASE_PATH@|$base_path|g" \
     "$f")"
@@ -211,6 +292,7 @@ preflight() {
     warn "planning with the placeholder Reality target www.example.net; a real install needs your own choice (docs/REALITY-TARGET.md)"
   fi
   validate_env
+  resolve_lan_gateway
   ok "settings are valid for $CASAVPN_DOMAIN (LAN $CASAVPN_LAN_CIDR, VPN port $CASAVPN_VPN_PORT, web port $CASAVPN_WEB_PORT)"
 
   USE_TAILSCALE=0
@@ -265,9 +347,36 @@ step_files() {
 
 # ======================================================================== 3x-ui ==
 
+# adopt_existing_panel: a panel database exists but our credentials file does not
+# (restored backup, reinstall, a panel set up by hand). The database is the truth:
+# take the user name and base path from it, and never invent a password for it.
+# 3x-ui keeps only a hash of the password, so it cannot be read back.
+ADOPT_NEW_PATH=0
+adopt_existing_panel() {
+  local user base
+  user="$(xui_db_user 2>/dev/null || true)"; base="$(xui_db_base_path 2>/dev/null || true)"
+  if [ "$DRY_RUN" = 1 ]; then
+    log "  $XUI_DB already exists and $CRED_FILE does not: would read the user name and base path from the database"
+    log "  (3x-ui stores only a password hash: the password cannot be recovered, so none would be written or printed)"
+    return 0
+  fi
+  [ -n "$user" ] || die "$XUI_DB exists but its panel user name cannot be read (sqlite3 missing, or the database is damaged). Restore $CRED_FILE, or move the database aside and re-run."
+  if [ -z "$base" ]; then
+    # Stock 3x-ui serves the panel at "/": nginx cannot proxy that safely. Pick a secret path.
+    base="$(openssl rand -hex 8)"; ADOPT_NEW_PATH=1
+    warn "the existing panel has no secret base path; using a generated one (it is set in the database below)"
+  fi
+  install -d -m 0755 "$(dirname "$CRED_FILE")"
+  ( umask 077
+    printf '# Written by install.sh from the existing panel database. Root only.\n# PANEL_PASSWORD is absent on purpose: 3x-ui stores only a hash. To reset it:\n#   sudo %s/x-ui setting -username <user> -password <new password> && sudo systemctl restart x-ui\nPANEL_USER=%s\nPANEL_BASE_PATH=%s\n' "$XUI_DIR" "$user" "$base" >"$CRED_FILE" )
+  chmod 0600 "$CRED_FILE"
+  warn "the panel database already existed: read the user name and base path from it into $CRED_FILE; the password is NOT known (see the end of this run)"
+}
+
 # ensure_panel_credentials: generated once, never overwritten, never printed.
 ensure_panel_credentials() {
   if [ -e "$CRED_FILE" ]; then ok "panel credentials already exist: $CRED_FILE (kept)"; return 0; fi
+  if [ -e "$XUI_DB" ]; then adopt_existing_panel; return 0; fi
   if [ "$DRY_RUN" = 1 ]; then log "  would generate panel credentials into $CRED_FILE (mode 0600, never printed)"; return 0; fi
   install -d -m 0755 "$(dirname "$CRED_FILE")"
   local user pass path
@@ -337,6 +446,7 @@ step_3xui() {
   [ -e "$XUI_DB" ] || die "3x-ui did not create $XUI_DB"
 
   systemctl stop x-ui 2>/dev/null || true
+  if [ "$ADOPT_NEW_PATH" = 1 ]; then sqlite_set webBasePath "/$(panel_cred PANEL_BASE_PATH)/"; fi
   sqlite_set webListen 127.0.0.1
   sqlite_set subListen 127.0.0.1
   sqlite_set subPort "$CASAVPN_SUB_PORT"
@@ -370,6 +480,29 @@ install_xui_unit() {
 
 # ======================================================================== certs ==
 
+# write_cloudflare_ini: certbot's renewals read the token from this file, so it is
+# rewritten on EVERY run that has a token. A rotated token reaches it even when the
+# certificate already exists; leaving the old one would fail renewals until expiry.
+write_cloudflare_ini() {
+  local want tmp
+  want="$(printf 'dns_cloudflare_api_token = %s\n' "$CF_API_TOKEN")"
+  if [ "$DRY_RUN" = 1 ]; then
+    log "  would write $CF_INI (mode 0600) from CF_API_TOKEN, replacing any older token"
+    return 0
+  fi
+  install -d -m 0755 "$(dirname "$CF_INI")"
+  if [ -f "$CF_INI" ] && [ "$(cat "$CF_INI")" = "$want" ]; then
+    chmod 0600 "$CF_INI"
+    ok "$CF_INI already holds the current token"
+    return 0
+  fi
+  tmp="$(mktemp "$CF_INI.XXXXXX")"
+  ( umask 077; printf '%s\n' "$want" >"$tmp" )
+  chmod 0600 "$tmp"
+  mv -f "$tmp" "$CF_INI"
+  ok "wrote the current CF_API_TOKEN to $CF_INI (mode 0600)"
+}
+
 step_certs() {
   step "TLS certificate (Let's Encrypt, DNS-01 through Cloudflare)"
   if [ -z "$CF_API_TOKEN" ]; then
@@ -377,20 +510,19 @@ step_certs() {
     leave "Get a certificate and turn on DDNS: set CF_API_TOKEN and CF_ZONE_ID in $ENV_FILE and run install.sh again (docs/DYNAMIC-IP.md)."
     return 0
   fi
+  write_cloudflare_ini
   if [ "$CASAVPN_ACME_AGREE_TOS" != 1 ]; then
     warn "Let's Encrypt needs you to accept its Subscriber Agreement (https://letsencrypt.org/repository/)."
     warn "Read it, then set CASAVPN_ACME_AGREE_TOS=1 in $ENV_FILE and run install.sh again. Skipping the certificate."
     leave "Accept the Let's Encrypt Subscriber Agreement by setting CASAVPN_ACME_AGREE_TOS=1 in $ENV_FILE, then re-run install.sh."
     return 0
   fi
-  if [ -e "/etc/letsencrypt/live/$CASAVPN_DOMAIN/fullchain.pem" ]; then
-    ok "a certificate for $CASAVPN_DOMAIN already exists (certbot renews it)"
+  if [ -e "$LE_DIR/live/$CASAVPN_DOMAIN/fullchain.pem" ]; then
+    ok "a certificate for $CASAVPN_DOMAIN already exists (certbot renews it with the token in $CF_INI)"
   else
     if [ "$DRY_RUN" = 1 ]; then
-      log "  would write $CF_INI (mode 0600) from CF_API_TOKEN and run certbot certonly --dns-cloudflare for $CASAVPN_DOMAIN"
+      log "  would run certbot certonly --dns-cloudflare for $CASAVPN_DOMAIN"
     else
-      ( umask 077; printf 'dns_cloudflare_api_token = %s\n' "$CF_API_TOKEN" >"$CF_INI" )
-      chmod 0600 "$CF_INI"
       local -a args=(certonly --dns-cloudflare --dns-cloudflare-credentials "$CF_INI" --dns-cloudflare-propagation-seconds 30
         -d "$CASAVPN_DOMAIN" --non-interactive --agree-tos --keep-until-expiring)
       if [ -n "$CASAVPN_ACME_EMAIL" ]; then args+=(-m "$CASAVPN_ACME_EMAIL"); else args+=(--register-unsafely-without-email); fi
@@ -399,7 +531,7 @@ step_certs() {
       ok "certificate issued for $CASAVPN_DOMAIN"
     fi
   fi
-  install_file 0755 "$HERE/config/certbot-deploy-hook.sh" "/etc/letsencrypt/renewal-hooks/deploy/casavpn-reload-nginx.sh"
+  install_file 0755 "$HERE/config/certbot-deploy-hook.sh" "$LE_DIR/renewal-hooks/deploy/casavpn-reload-nginx.sh"
   if [ "$DRY_RUN" = 1 ]; then
     log "  would make sure certbot.timer is enabled"
   else
@@ -417,7 +549,7 @@ step_nginx() {
   render_tmp "$HERE/config/nginx/casavpn.conf.tmpl"
   install_file 0644 "$RENDERED" "$ETC/nginx/sites-available/casavpn"
 
-  if [ ! -e "/etc/letsencrypt/live/$CASAVPN_DOMAIN/fullchain.pem" ] && [ "$DRY_RUN" = 0 ]; then
+  if [ ! -e "$LE_DIR/live/$CASAVPN_DOMAIN/fullchain.pem" ] && [ "$DRY_RUN" = 0 ]; then
     warn "no certificate yet: the site is written but not enabled"
     leave "Enable the web front end once a certificate exists: re-run install.sh (it links /etc/nginx/sites-enabled/casavpn)."
     return 0
@@ -584,17 +716,48 @@ step_updates() {
 
 # ======================================================================= summary ==
 
+# print_panel_access: how to open the panel, and where its credentials are, truthfully.
+print_panel_access() {
+  cat >&2 <<EOF
+  Open the panel from a machine on the LAN, by the HOSTNAME. The certificate is issued
+  for $CASAVPN_DOMAIN and nginx refuses a TLS handshake for a bare IP, so point the name at
+  this host's LAN address on that machine (a hosts entry, or split DNS on your router):
+      echo '<LAN_IP> $CASAVPN_DOMAIN' | sudo tee -a /etc/hosts
+      https://$CASAVPN_DOMAIN:$CASAVPN_WEB_PORT/<base path>/
+  Over Tailscale do the same with the host's Tailscale address. If the name points at your
+  PUBLIC address the request hairpins through the router and is refused on purpose.
+  (Before the certificate exists nginx is not serving it yet; tunnel instead:
+      ssh -L 8080:127.0.0.1:$CASAVPN_PANEL_PORT $CASAVPN_ADMIN_USER@<LAN_IP>   then   http://127.0.0.1:8080/<base path>/ )
+EOF
+  if [ -n "$(panel_cred PANEL_PASSWORD 2>/dev/null || true)" ]; then
+    cat >&2 <<EOF
+  The base path, username and password are in $CRED_FILE (root only):
+      sudo cat $CRED_FILE
+EOF
+  elif [ -e "$XUI_DB" ] || [ -e "$CRED_FILE" ]; then
+    cat >&2 <<EOF
+  This panel already existed, so CasaVPN did not set a password and cannot show one
+  (3x-ui stores only a hash). The base path and user name are in $CRED_FILE (root only).
+  If you do not know the password, reset it and restart the panel:
+      sudo $XUI_DIR/x-ui setting -username <user> -password '<new password>'
+      sudo systemctl restart x-ui
+EOF
+  else
+    cat >&2 <<EOF
+  The base path, username and password are generated into $CRED_FILE (root only):
+      sudo cat $CRED_FILE
+EOF
+  fi
+}
+
 print_inbound_guide() {
   cat >&2 <<EOF
 
 ${C_B}Create the VPN inbound in the panel${C_Z} (the one step left to you; the panel does it better than a script)
 
-  Open the panel from a machine on the LAN (or over Tailscale):
-      https://<LAN_IP>:$CASAVPN_WEB_PORT/<base path>/
-  (Before the certificate exists nginx is not serving it yet; tunnel instead:
-      ssh -L 8080:127.0.0.1:$CASAVPN_PANEL_PORT $CASAVPN_ADMIN_USER@<LAN_IP>   then   http://127.0.0.1:8080/<base path>/ )
-  The base path, username and password are in $CRED_FILE (root only):
-      sudo cat $CRED_FILE
+EOF
+  print_panel_access
+  cat >&2 <<EOF
   Inbounds -> Add Inbound:
       Remark              main
       Protocol            vless

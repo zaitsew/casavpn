@@ -67,7 +67,7 @@ CASAVPN_DOMAIN=vpn.example.com CASAVPN_SSH_TARGET=pi@<LAN_IP> ./scripts/healthch
 the panel and subscription ports listen on loopback only; the `inet casavpn` table
 is loaded; SSH password and root login are off (`sshd -T`); `minClientVer` is set;
 the Xray template still blocks private ranges and BitTorrent; the certificate has
-more than 14 days left; DNS equals the host's public IP; a backup newer than 3 days
+more than 14 days left; DNS equals the host's public IP; a backup (`.tar.zst.age` or `.tar.gz.age`) newer than 3 days
 exists; the disk is under 90% full.
 
 **From the laptop** it verifies: the name resolves (and, with `--ssh`, to the host's

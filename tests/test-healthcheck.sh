@@ -70,11 +70,26 @@ case " ${FAKE_NC_CLOSED:-} " in *" $port "*) exit 1 ;; esac
 exit 0'
 mk openssl '#!/usr/bin/env bash
 case "$1" in
-  s_client) printf "subject=CN = %s\nVerify return code: 0 (ok)\n" "${FAKE_CERT_CN:-www.example.net}" ;;
+  s_client) cat "$FAKE_CERTS/${FAKE_CERT:-good}.pem"; printf "Verify return code: 0 (ok)\n" ;;
   x509) if [[ "$*" == *-enddate* && "$*" != *-in* ]]; then echo "notAfter=Jan  1 00:00:00 2099 GMT"; else exec "$REAL_OPENSSL" "$@"; fi ;;
   *) exec "$REAL_OPENSSL" "$@" ;;
 esac'
 REAL_OPENSSL="$(command -v openssl)"; export REAL_OPENSSL
+
+# Certificates the fake `openssl s_client` presents: name = file, with CN and SANs.
+FAKE_CERTS="$T/certs"; export FAKE_CERTS; mkdir -p "$FAKE_CERTS"
+mkcert() { # <file> <CN> [subjectAltName list, e.g. DNS:a.example.net,DNS:b.example.net]
+  { printf '[req]\ndistinguished_name=dn\nx509_extensions=v3\nprompt=no\n[dn]\nCN=%s\n[v3]\n' "$2"
+    [ -z "${3:-}" ] || printf 'subjectAltName=%s\n' "$3"; } >"$T/cert.cnf"
+  "$REAL_OPENSSL" req -x509 -newkey rsa:2048 -nodes -days 30 -config "$T/cert.cnf" \
+    -keyout "$T/cert.key" -out "$FAKE_CERTS/$1.pem" >/dev/null 2>&1
+}
+mkcert good www.example.net DNS:www.example.net,DNS:example.net
+mkcert wrong something.else.test DNS:something.else.test
+mkcert lookalike example-attacker.test DNS:www.example.net.attacker.test,DNS:example-attacker.test
+mkcert wild "*.example.net" DNS:*.example.net
+mkcert cnonly www.example.net
+mkcert sanwins www.example.net DNS:other.example.org
 
 # --- local-mode fixtures -----------------------------------------------------------
 DB="$T/x-ui.db"
@@ -146,6 +161,8 @@ expect "no database is critical" 1 "no 3x-ui database"
 
 reset_local; find "$BK" -type f -delete; lrun
 expect "no recent backup is critical" 1 "no backup newer than 3 days"
+reset_local; find "$BK" -type f -delete; touch "$BK/casavpn-20260101T000000Z.tar.gz.age"; lrun
+expect "a fresh gzip backup (host without zstd) counts" 0 "a backup newer than 3 days exists"
 reset_local; find "$BK" -type f -delete; touch -t 202001010000 "$BK/casavpn-20200101T000000Z.tar.zst.age"; lrun
 expect "only an old backup is critical" 1 "no backup newer than 3 days"
 
@@ -165,7 +182,7 @@ expect "an unknown argument is a usage error" 2 "unknown argument"
 
 echo "healthcheck.sh (remote)"
 rrun() { OUT="$(env PATH="$BIN:$PATH" CASAVPN_ENV="$T/test.env" "$HC" --ssh admin@192.0.2.10 "$@" 2>&1)"; RC=$?; }
-reset_remote() { unset FAKE_DNS_IP FAKE_PUBLIC_IP FAKE_WEB_CODE FAKE_NC_CLOSED FAKE_CERT_CN FAKE_BAD_UNITS FAKE_SSH_DOWN; }
+reset_remote() { unset FAKE_DNS_IP FAKE_PUBLIC_IP FAKE_WEB_CODE FAKE_NC_CLOSED FAKE_CERT FAKE_BAD_UNITS FAKE_SSH_DOWN; }
 reset_remote; FAKE_NC_CLOSED="2053 2096 22"; export FAKE_NC_CLOSED; rrun
 expect "a healthy deployment passes" 0 "All critical checks passed"
 said "  ...and reports closed management ports" "port 22 is closed"
@@ -174,8 +191,19 @@ reset_remote; FAKE_DNS_IP=203.0.113.9; export FAKE_DNS_IP; rrun
 expect "DNS differing from the Pi's public IP is critical" 1 "casavpn-ddns --force"
 reset_remote; FAKE_NC_CLOSED="443"; export FAKE_NC_CLOSED; rrun
 expect "a closed VPN port is critical" 1 "unreachable: check the router port forward"
-reset_remote; FAKE_CERT_CN="something.else.test"; export FAKE_CERT_CN; rrun
+reset_remote; FAKE_CERT=wrong; export FAKE_CERT; rrun
 expect "a wrong camouflage certificate is critical" 1 "Reality may be misconfigured"
+reset_remote; FAKE_CERT=lookalike; export FAKE_CERT; rrun
+expect "a look-alike certificate (target name only as a substring) is critical" 1 "not valid for www.example.net"
+reset_remote; FAKE_CERT=wild; export FAKE_CERT; rrun
+expect "a wildcard certificate for the target's parent domain is accepted" 0 "genuine www.example.net certificate"
+reset_remote; FAKE_CERT=wild; export FAKE_CERT
+OUT="$(env PATH="$BIN:$PATH" CASAVPN_ENV="$T/test.env" "$HC" --ssh admin@192.0.2.10 --sni a.b.example.net 2>&1)"; RC=$?
+expect "a wildcard stands for one label only" 1 "not valid for a.b.example.net"
+reset_remote; FAKE_CERT=cnonly; export FAKE_CERT; rrun
+expect "a certificate with no SAN falls back to its CN" 0 "genuine www.example.net certificate"
+reset_remote; FAKE_CERT=sanwins; export FAKE_CERT; rrun
+expect "the SAN list wins over a matching CN" 1 "not valid for www.example.net"
 reset_remote; FAKE_WEB_CODE=000; export FAKE_WEB_CODE; rrun
 expect "no HTTPS answer on the web port is critical" 1 "no HTTPS response"
 reset_remote; FAKE_WEB_CODE=200; export FAKE_WEB_CODE; rrun

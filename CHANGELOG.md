@@ -23,6 +23,28 @@ The first public version, generalised from a private home deployment.
 - Documentation in `docs/`.
 - `CASAVPN_REALITY_TARGET` has no default: `install.sh` and the settings validation refuse an empty value, the healthcheck needs `--sni` or the setting, and `docs/REALITY-TARGET.md` explains how to choose and check a site. The VPN port stays 443 by default and a different one is warned about.
 
+### Fixed after the first review round
+
+- The panel ACL denies the router's LAN address (`CASAVPN_LAN_GATEWAY`, detected from the
+  default route) before allowing the LAN, so a VPN user cannot reach the panel by
+  hairpinning through the router; the Xray panel-route example gains a matching
+  blackhole guard (`docs/HARDENING.md`, "Hairpin NAT").
+- The panel is opened by hostname (hosts entry or split DNS); the printed URL and the docs
+  no longer send you to a bare LAN IP that fails the TLS handshake.
+- `http2` is rendered as `listen ... ssl http2` for nginx older than 1.25.1.
+- An existing `x-ui.db` without a credentials file is adopted (user name and base path read
+  from it); a password that cannot be known is never invented or printed.
+- `cloudflare.ini` is rewritten on every run with a token; fail2ban exempts loopback only
+  (`CASAVPN_FAIL2BAN_IGNOREIP` adds more).
+- `cf-api.sh` follows every page of DNS records; the healthcheck accepts `.tar.gz.age`
+  backups and matches the camouflage certificate's names (SAN, one-label wildcards) instead
+  of a substring; `pull-backups.sh` succeeds only for a non-empty local copy.
+- Link generation: the renderer is found after install, only VLESS inbounds with an `id`
+  are rendered, and the output file is created mode 0600 through a temp file.
+- `casavpn-backup` fails (and prunes nothing) when a file cannot be copied; `casavpn-ddns`
+  ignores proxy variables; `dns-diff.sh` asks the zone's real parent for the DS record;
+  `pii-scan.py` checks file names with the generic rules and scans merge commits.
+
 ### Verified
 
 - shellcheck-clean; offline tests for every script and for the scanner, run with

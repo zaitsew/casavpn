@@ -239,6 +239,17 @@ R3="$T/remote-empty"; mkdir -p "$R3"
 pull "$R3" "$T/local3" >"$T/pull3.log" 2>&1; rc=$?
 expect "pull: Pi has no backups" 2 "$rc"
 
+# a fresh but zero-byte archive on the host is not a successful pull
+R8="$T/remote-zero"; mkdir -p "$R8"; mk "$R8" "$(stamp_ago 30)"; : >"$R8/casavpn-$(stamp_ago 2).tar.zst.age"
+pull "$R8" "$T/local8" >"$T/pull8.log" 2>&1; rc=$?
+expect "pull: a zero-byte newest remote archive fails" 2 "$rc"
+check "  ...says ALERT" grep -q ALERT "$T/pull8.log"
+check "  ...writes no heartbeat" bash -c "[[ ! -e '$T/local8/.last-pull' ]]"
+check "  ...keeps no empty local file" bash -c "[[ -z \"\$(find '$T/local8' -name '*.age' -size 0)\" ]]"
+R9="$T/remote-zero-only"; mkdir -p "$R9"; : >"$R9/casavpn-$(stamp_ago 2).tar.zst.age"
+pull "$R9" "$T/local9" >"$T/pull9.log" 2>&1; rc=$?
+expect "pull: only a zero-byte remote archive fails too" 2 "$rc"
+
 pull "$T/nowhere" "$L1" >"$T/pull4.log" 2>&1; rc=$?
 expect "pull: Pi unreachable, recent local copy" 0 "$rc"
 check "  ...with a warning" grep -q WARNING "$T/pull4.log"

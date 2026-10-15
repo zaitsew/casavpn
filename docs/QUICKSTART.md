@@ -77,15 +77,19 @@ At the end it prints the exact values for the one manual step.
 ## 5. Create the VPN inbound in the panel
 
 Open the panel from a machine on your LAN. The URL, user and password are in a
-root-only file:
+root-only file (on a fresh install; see below for an existing panel):
 
 ```bash
 sudo cat /etc/casavpn/panel-credentials.env
 ```
 
-Use `https://<LAN_IP>:8443/<base path>/` (the browser will warn about the
-certificate name: it is issued for your domain, not the LAN address; accept it
-for this LAN-only visit). Then, as the installer prints: add a VLESS inbound on
+Use `https://vpn.example.com:8443/<base path>/` (your domain), with the name pointed
+at the Pi's LAN address on the machine you browse from: `echo '<LAN_IP> vpn.example.com'
+| sudo tee -a /etc/hosts`, or split DNS on your router. Do not use the bare LAN IP: the
+certificate is issued for the domain and nginx gives an IP no TLS handshake at all.
+If the installer found a panel database from an earlier install, it keeps that
+panel's user name and path and cannot show its password (3x-ui stores only a hash);
+the installer prints how to reset it. Then, as the installer prints: add a VLESS inbound on
 your VPN port with security Reality, the target in `CASAVPN_REALITY_TARGET`,
 "Get New Cert", and one client per person with flow `xtls-rprx-vision`.
 

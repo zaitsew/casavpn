@@ -89,6 +89,7 @@ runs the same command. The ssh key must work with no prompt
 | Situation | Exit | Meaning |
 |---|---|---|
 | Host answers, newest backup older than 48 h (or none) | 2 | the nightly job stopped: `ssh pi@<LAN_IP> journalctl -u casavpn-backup.service` |
+| Host answers, newest backup is empty or did not arrive | 2 | the job writes bad archives; an empty copy is removed and never counted as a pull |
 | Host unreachable, newest local copy older than 7 days | 3 | you have not been home; connect and run it |
 | Host unreachable, local copy newer than 7 days | 0 | warning only: a laptop is not always home |
 | Fresh | 0 | writes `.last-pull` (the heartbeat) |

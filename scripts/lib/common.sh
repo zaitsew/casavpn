@@ -58,6 +58,9 @@ apply_defaults() {
   : "${CASAVPN_PANEL_PORT:=2053}"
   : "${CASAVPN_SUB_PORT:=2096}"
   : "${CASAVPN_LAN_CIDR:=192.168.0.0/24}"
+  # The router's LAN address. Empty = detect it from the default route; "none" = no deny rule.
+  : "${CASAVPN_LAN_GATEWAY:=}"
+  : "${CASAVPN_FAIL2BAN_IGNOREIP:=}"
   : "${CASAVPN_ADMIN_USER:=pi}"
   # No default on purpose: a shared default site is a fingerprint (docs/REALITY-TARGET.md).
   : "${CASAVPN_REALITY_TARGET:=}"
@@ -74,12 +77,19 @@ apply_defaults() {
   : "${CASAVPN_BACKUP_GROUP:=}"
   : "${CASAVPN_SSH_TARGET:=}"
   export CASAVPN_VPN_PORT CASAVPN_WEB_PORT CASAVPN_SSH_PORT CASAVPN_PANEL_PORT CASAVPN_SUB_PORT \
-    CASAVPN_LAN_CIDR CASAVPN_ADMIN_USER CASAVPN_REALITY_TARGET CASAVPN_MIN_CLIENT_VER \
+    CASAVPN_LAN_CIDR CASAVPN_LAN_GATEWAY CASAVPN_FAIL2BAN_IGNOREIP CASAVPN_ADMIN_USER CASAVPN_REALITY_TARGET CASAVPN_MIN_CLIENT_VER \
     CASAVPN_DDNS_PROVIDER CASAVPN_ACME_STAGING CASAVPN_ACME_AGREE_TOS CASAVPN_BACKUP_KEEP
 }
 
 valid_port() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; [ "$1" -ge 1 ] && [ "$1" -le 65535 ]; }
 valid_host() { [[ "$1" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]; }
+valid_ip4() {
+  [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  local o IFS=.
+  # shellcheck disable=SC2086
+  set -- $1
+  for o in "$@"; do [ "$o" -le 255 ] || return 1; done
+}
 valid_cidr() {
   [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]] || return 1
   local ip="${1%/*}" bits="${1#*/}" o IFS=.
@@ -97,6 +107,10 @@ validate_env() {
   if [ -z "${CASAVPN_DOMAIN:-}" ]; then complain "CASAVPN_DOMAIN is not set"
   elif ! valid_host "$CASAVPN_DOMAIN"; then complain "CASAVPN_DOMAIN is not a hostname: $CASAVPN_DOMAIN"; fi
   valid_cidr "$CASAVPN_LAN_CIDR" || complain "CASAVPN_LAN_CIDR is not a CIDR like 192.168.0.0/24: $CASAVPN_LAN_CIDR"
+  case "$CASAVPN_LAN_GATEWAY" in ''|none) ;; *) valid_ip4 "$CASAVPN_LAN_GATEWAY" || complain "CASAVPN_LAN_GATEWAY is not an IPv4 address (or 'none'): $CASAVPN_LAN_GATEWAY" ;; esac
+  if [ -n "$CASAVPN_FAIL2BAN_IGNOREIP" ] && ! [[ "$CASAVPN_FAIL2BAN_IGNOREIP" =~ ^[0-9A-Fa-f:./,[:space:]]+$ ]]; then
+    complain "CASAVPN_FAIL2BAN_IGNOREIP is not a list of addresses or CIDRs separated by spaces or commas: $CASAVPN_FAIL2BAN_IGNOREIP"
+  fi
   [[ "$CASAVPN_ADMIN_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || complain "CASAVPN_ADMIN_USER is not a valid user name: $CASAVPN_ADMIN_USER"
   for p in VPN_PORT WEB_PORT SSH_PORT PANEL_PORT SUB_PORT; do
     eval "valid_port \"\$CASAVPN_$p\"" || complain "CASAVPN_$p is not a port (1-65535)"

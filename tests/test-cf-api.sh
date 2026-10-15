@@ -37,7 +37,9 @@ printf '%s %s %s\n' "$method" "${url#*/client/v4}" "$body" >> "$FAKE_CURL_LOG"
 case "$method ${url#*/client/v4}" in
   "GET /user/tokens/verify") cat "$FAKE_DIR/verify.json" ;;
   "GET /zones?name="*) cat "$FAKE_DIR/zone.json" ;;
-  "GET /zones/Z1/dns_records"*) cat "$FAKE_DIR/records.json" ;;
+  "GET /zones/Z1/dns_records"*)
+    page="${url##*page=}"; case "$url" in *page=*) ;; *) page=1 ;; esac
+    if [ -n "${FAKE_PAGED:-}" ]; then cat "$FAKE_DIR/records-p$page.json"; else cat "$FAKE_DIR/records.json"; fi ;;
   "PATCH /zones/Z1/dns_records/"*)
     case "$url" in *"/${FAKE_PATCH_FAIL:-none}") echo '{"success":false,"errors":[{"code":1004,"message":"record locked"}],"result":null}'; exit 0 ;; esac
     echo '{"success":true,"errors":[],"result":{"type":"A","name":"patched","ttl":60}}' ;;
@@ -132,6 +134,36 @@ run set-ttl example.com vpn 60 --apply
 [ $RC -ne 0 ] && printf '%s' "$OUT" | grep -q "1 update(s) failed"
 check "set-ttl exits non-zero when its PATCH fails" $?
 unset FAKE_PATCH_FAIL
+
+# records on later pages are found, not silently skipped
+cat > "$FAKE_DIR/records-p1.json" <<'J'
+{"success":true,"errors":[],"result_info":{"page":1,"per_page":500,"total_pages":3},"result":[
+ {"id":"R1","name":"vpn.example.com","type":"A","content":"198.51.100.10","proxied":false,"ttl":3600}]}
+J
+cat > "$FAKE_DIR/records-p2.json" <<'J'
+{"success":true,"errors":[],"result_info":{"page":2,"per_page":500,"total_pages":3},"result":[
+ {"id":"R5","name":"a.example.com","type":"A","content":"203.0.113.40","proxied":true,"ttl":1}]}
+J
+cat > "$FAKE_DIR/records-p3.json" <<'J'
+{"success":true,"errors":[],"result_info":{"page":3,"per_page":500,"total_pages":3},"result":[
+ {"id":"R6","name":"vpn.example.com","type":"TXT","content":"x","proxied":false,"ttl":3600},
+ {"id":"R7","name":"b.example.com","type":"A","content":"203.0.113.41","proxied":true,"ttl":1}]}
+J
+export FAKE_PAGED=1
+run list-records example.com
+[ $RC -eq 0 ] && printf '%s' "$OUT" | grep -q "a.example.com" && printf '%s' "$OUT" | grep -q "b.example.com" && printf '%s' "$OUT" | grep -q "vpn.example.com"
+check "list-records follows every page" $?
+run ensure-grey example.com --apply
+[ $RC -eq 0 ] && [ "$(grep -c '^PATCH' "$FAKE_CURL_LOG")" -eq 2 ] && grep -q 'dns_records/R5 ' "$FAKE_CURL_LOG" && grep -q 'dns_records/R7 ' "$FAKE_CURL_LOG"
+check "ensure-grey --apply patches proxied records on pages 2 and 3" $?
+run set-ttl example.com vpn 60 --apply
+[ $RC -eq 0 ] && grep -q 'dns_records/R1 ' "$FAKE_CURL_LOG" && grep -q 'dns_records/R6 ' "$FAKE_CURL_LOG"
+check "set-ttl --apply patches a record found on a later page" $?
+echo '{"success":false,"errors":[{"code":1,"message":"page 3 broke"}],"result":null}' > "$FAKE_DIR/records-p3.json"
+run ensure-grey example.com --apply
+[ $RC -ne 0 ] && ! grep -q '^PATCH' "$FAKE_CURL_LOG"
+check "a failed page fails the command before anything is patched" $?
+unset FAKE_PAGED
 
 echo
 echo "passed: $pass  failed: $fail"

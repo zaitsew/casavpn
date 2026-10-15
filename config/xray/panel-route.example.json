@@ -1,5 +1,5 @@
 {
-  "_comment": "OPTIONAL. Merge into the 3x-ui Xray template (panel -> Xray Settings -> Configuration). The outbound sends ONE VPN user's requests for the web port to nginx on loopback, so that user (and nobody else on the VPN) can reach the panel from anywhere. finalRules is required because Xray's freedom outbound blocks private and loopback targets by default for VLESS-inbound traffic. The rule must sit BEFORE the geoip:private block. Replace vpn.example.com, 8443 and alice with your hostname, CASAVPN_WEB_PORT and the client's email as shown in the panel.",
+  "_comment": "OPTIONAL. Merge into the 3x-ui Xray template (panel -> Xray Settings -> Configuration). `outbound` sends ONE VPN user's requests for the web port to nginx on loopback, so that user (and nobody else on the VPN) can reach the panel from anywhere. finalRules is required because Xray's freedom outbound blocks private and loopback targets by default for VLESS-inbound traffic. `rules` go into routing.rules, in this order, BEFORE the geoip:private block: first the owner's rule, then the hairpin guard. The guard sends every OTHER client's requests for this server's own hostname or public IP on the web port to the blackhole outbound (tag `blocked` in the default template), so they cannot hairpin back through the router at all; nginx also denies the router's LAN address (CASAVPN_LAN_GATEWAY) as the second layer. Cost of the guard: a client cannot fetch /sub/ through its own tunnel (refresh the subscription with the VPN off); drop the last two rules if you need that and rely on nginx alone. Replace vpn.example.com, 8443, alice, and 203.0.113.10 (your current public IP; it changes, the hostname rule does not) with your values.",
   "outbound": {
     "tag": "panel",
     "protocol": "freedom",
@@ -11,11 +11,25 @@
       ]
     }
   },
-  "rule": {
-    "type": "field",
-    "user": ["alice"],
-    "domain": ["full:vpn.example.com"],
-    "port": "8443",
-    "outboundTag": "panel"
-  }
+  "rules": [
+    {
+      "type": "field",
+      "user": ["alice"],
+      "domain": ["full:vpn.example.com"],
+      "port": "8443",
+      "outboundTag": "panel"
+    },
+    {
+      "type": "field",
+      "domain": ["full:vpn.example.com"],
+      "port": "8443",
+      "outboundTag": "blocked"
+    },
+    {
+      "type": "field",
+      "ip": ["203.0.113.10/32"],
+      "port": "8443",
+      "outboundTag": "blocked"
+    }
+  ]
 }

@@ -56,13 +56,41 @@ The base path is a speed bump, not a secret to rely on. The access control is th
 
 | From | How |
 |---|---|
-| Home LAN | `https://<LAN_IP>:8443/<base path>/` (certificate-name warning is expected) |
+| Home LAN | `https://vpn.example.com:8443/<base path>/`, with the name pointing at the Pi's LAN address on that machine (a hosts entry or split DNS; see below) |
 | Anywhere, VPN down | Tailscale: `https://<tailscale-ip>:8443/<base path>/`, or `ssh` over Tailscale. This is the repair path, because it does not depend on the thing that is broken |
 | Anywhere, VPN up | The optional panel route (below) |
 | Last resort | `ssh -L 8080:127.0.0.1:2053 pi@<LAN_IP>` then `http://127.0.0.1:8080/<base path>/` |
 
-A request to the public hostname **from home** hairpins through the router, arrives
-from your public IP and is refused. At home use the LAN address.
+**Open the panel by its hostname, not by the LAN IP.** The certificate is issued for
+your domain, and a request that does not carry that name gets no TLS handshake at all
+(that is what hides the server from IP scans). So on the machine you browse from,
+point the name at the Pi's LAN address: `echo '<LAN_IP> vpn.example.com' | sudo tee -a
+/etc/hosts`, or add the same record as split DNS on your router. The certificate then
+matches and there is no warning. Over Tailscale do the same with the Tailscale
+address.
+
+### Hairpin NAT
+
+A request to the public hostname **from home** goes out to the router and comes back
+in ("hairpin NAT"). Many routers rewrite the source of such a connection to their own
+LAN address, so nginx would see a LAN client and the LAN `allow` would let it in.
+That is also what **every VPN user** looks like when they open the public hostname:
+their traffic leaves through the Pi's connection, hairpins, and arrives from the
+router. Two layers close this:
+
+1. **nginx** denies the router's LAN address *before* it allows the LAN
+   (`deny <gateway>; allow <LAN CIDR>;` in `casavpn-admin-only.conf`). The address is
+   `CASAVPN_LAN_GATEWAY`; if unset, `install.sh` takes it from the default route (when
+   it lies inside `CASAVPN_LAN_CIDR`). If it cannot be detected the installer warns
+   and lists it under "what is left for you": set it and re-run. `none` turns the
+   rule off. The cost: a request that really does hairpin from home is refused, which
+   is why the hosts entry or split DNS above matters.
+2. **Xray** blackholes the web port for everyone except the panel-route owner
+   (below), so the hairpin never starts. This one is optional and lives in your Xray
+   template.
+
+Check it from a VPN client with the VPN on: `curl -k https://vpn.example.com:8443/<base path>/`
+must print `403` (or fail), not the panel's login page.
 
 **Tailscale** is optional. `install.sh --tailscale` (or an installed `tailscale`
 command) adds the firewall rules; you still run `sudo tailscale up` once and
@@ -72,10 +100,17 @@ phone with the same account.
 **The panel route** lets exactly one VPN user (you) open the panel from anywhere
 while the VPN works: an Xray `freedom` outbound with `redirect` sends that user's
 requests for the web port to nginx on loopback, which then sees `127.0.0.1`.
-Every other VPN user leaves through the router, arrives from the public IP and gets
-`403`. Merge [config/xray/panel-route.example.json](../config/xray/panel-route.example.json)
-into the Xray template (panel > Xray Settings), put the rule **before** the
-`geoip:private` block, and replace the hostname, port and client name.
+Every other VPN user is turned away (see "Hairpin NAT" above). Merge
+[config/xray/panel-route.example.json](../config/xray/panel-route.example.json)
+into the Xray template (panel > Xray Settings): the `panel` outbound, and its three
+`rules` in the order given, all **before** the `geoip:private` block, with your
+hostname, port, client name and current public IP. The first rule is the owner's;
+the other two are the guard: they send every other client's requests for the hostname
+(and the public IP) on the web port to the `blocked` blackhole outbound. The guard
+costs one thing: a client cannot fetch `/sub/` through its own tunnel, so refresh
+subscriptions with the VPN off. If you need that, leave the last two rules out;
+nginx's gateway deny still holds. The IP rule goes stale when your public IP changes
+(the hostname rule does not).
 
 > **Xray 26+ trap.** A `freedom` outbound blocks loopback and private targets by
 > default for traffic that arrived on a VLESS inbound. Without the explicit
@@ -104,10 +139,13 @@ Test a **second** SSH session before you close the first.
 
 ## 4. fail2ban
 
-An `sshd` jail (systemd backend): 4 failures in 10 minutes earns a 1 hour ban; the
-LAN is on the ignore list so you cannot lock yourself out at home. SSH is LAN-only
-already, so this is the second line: a compromised device on your network
-guessing passwords, or the day somebody opens the SSH port.
+An `sshd` jail (systemd backend): 4 failures in 10 minutes earns a 1 hour ban. Only
+loopback is on the ignore list: SSH is LAN-only already, so this jail exists for
+the second line, a compromised device on your network guessing passwords, and the
+LAN must not be exempt from it. To keep your own laptop from being banned after a
+typo, give it a fixed address and list that address in `CASAVPN_FAIL2BAN_IGNOREIP`
+(addresses or CIDRs, separated by spaces or commas), then re-run `install.sh`.
+A banned address is released with `sudo fail2ban-client set sshd unbanip <address>`.
 
 ## 5. Automatic security updates
 

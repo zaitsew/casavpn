@@ -3,10 +3,13 @@
 #
 # SSH is only reachable from the LAN (the firewall sees to that), so this jail
 # is the second line: it catches a compromised device on the home network
-# guessing passwords, and it covers the day someone opens the SSH port.
+# guessing passwords, and it covers the day someone opens the SSH port. Only
+# loopback is exempt, so the LAN is NOT: a device on it that guesses passwords
+# gets banned. To keep your own laptop out of the ban list, set
+# CASAVPN_FAIL2BAN_IGNOREIP (addresses or CIDRs) in casavpn.env.
 
 [DEFAULT]
-ignoreip = 127.0.0.1/8 ::1 @LAN_CIDR@
+ignoreip = 127.0.0.1/8 ::1@IGNOREIP_EXTRA@
 
 [sshd]
 enabled  = true

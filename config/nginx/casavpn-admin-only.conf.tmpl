@@ -3,18 +3,24 @@
 # Included in every panel location of the web vhost. /sub/ does NOT include it:
 # subscriptions must stay reachable for clients everywhere.
 #
+# nginx applies the first rule that matches, so the ORDER below matters.
+#
 #   127.0.0.1       the owner's own VPN client, when the optional "panel route"
 #                   is set up (config/xray/panel-route.example.json): Xray
 #                   delivers that one user's requests for the web port to
-#                   loopback, so they arrive from 127.0.0.1. Every other VPN
-#                   user leaves through the router (hairpin NAT) and shows up
-#                   as the public IP: denied.
-#   @LAN_CIDR@  the home LAN, by IP (https://<LAN_IP>:@WEB_PORT@/<base path>/).
-#                   Requests to the public hostname from home hairpin through the
-#                   router and arrive from the public IP, so they are denied
-#                   too: at home use the LAN IP, the VPN, or Tailscale.
+#                   loopback, so they arrive from 127.0.0.1.
+#   LAN gateway     DENIED before the LAN is allowed. A VPN user who opens the
+#                   public hostname leaves through the router and comes back
+#                   through its hairpin NAT. Many routers rewrite that source
+#                   to their own LAN address, which would otherwise match the
+#                   LAN rule below and let EVERY VPN user into the panel. This
+#                   is CASAVPN_LAN_GATEWAY (detected at install time).
+#   @LAN_CIDR@  the home LAN. Open the panel by its HOSTNAME with a hosts entry
+#                   or split DNS pointing at this host's LAN address: a request
+#                   that goes out to the public IP and hairpins back is refused.
 #   100.64.0.0/10   Tailscale: the independent way in when the VPN itself is down.
 allow 127.0.0.1;
+@LAN_GATEWAY_RULE@
 allow @LAN_CIDR@;
 allow 100.64.0.0/10;
 deny all;
