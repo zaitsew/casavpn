@@ -1,0 +1,28 @@
+# DNS inventory: the single list of names and record types that
+# scripts/dns-diff.sh compares between two nameservers.
+#
+#   cp config/dns/inventory.example.txt config/dns/inventory.txt
+#
+# Format: <name> <TYPE> [<TYPE> ...]     ("@" is the zone apex)
+#
+# List every name you know exists, and a few probes for records that might
+# exist (mail, DKIM, verification names) so a surprise shows up as a
+# difference. If you add a record at the registrar or in Cloudflare, add its
+# name here too.
+
+# the apex: web, mail (MX, SPF, verification), NS (differs by design)
+@                 A AAAA MX TXT CAA NS
+
+# the VPN hostname (CASAVPN_DOMAIN, without the zone suffix)
+vpn               A AAAA TXT
+
+www               A AAAA CNAME TXT
+
+# probes: names that are often there without anyone remembering
+_dmarc            TXT CNAME
+_domainkey        TXT CNAME
+mail              A CNAME MX
+autodiscover      A CNAME
+imap              A CNAME
+smtp              A CNAME
+webmail           A CNAME

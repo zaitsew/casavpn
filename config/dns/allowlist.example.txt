@@ -1,0 +1,13 @@
+# Differences scripts/dns-diff.sh tolerates.
+#
+#   cp config/dns/allowlist.example.txt config/dns/allowlist.txt
+#
+# Format: <name> <TYPE> [flags]
+#   nonempty   the value may differ, but the new side must still answer
+#   ns-only    applies only when comparing two nameservers, not resolvers
+#
+# vpn A: the home address legitimately changes (DDNS), so two nameservers may
+#        disagree briefly. It must never be missing.
+# @ NS:  the old zone lists your old nameservers, the new one Cloudflare's.
+vpn A nonempty
+@ NS ns-only

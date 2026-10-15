@@ -1,0 +1,11 @@
+# Records dns-diff.sh --resolvers watches on public resolvers after a cutover.
+#
+#   cp config/dns/key-records.example.txt config/dns/key-records.txt
+#
+# Format: <name> <TYPE>   ("@" is the zone apex)
+@ A
+@ MX
+@ TXT
+@ NS
+www A
+vpn A

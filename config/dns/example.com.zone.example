@@ -1,0 +1,22 @@
+; Example zone file for importing into Cloudflare (DNS -> Records -> Import).
+; Replace example.com and the documentation addresses with your own, keep the
+; DNS-only (grey cloud) setting for the VPN hostname: proxying it would break
+; the VPN, because Cloudflare only proxies HTTP(S).
+;
+; The VPN hostname is the one casavpn-ddns keeps up to date; the address below
+; is a placeholder it will overwrite. Keep the TTL at 60 so a new address
+; reaches the clients within a minute (Cloudflare's "Auto" is 300 seconds).
+$ORIGIN example.com.
+$TTL 3600
+
+; web (if you have one)
+@        3600 IN A     203.0.113.40
+www      3600 IN CNAME example.com.
+
+; mail (replace with your provider's records, or delete)
+@        3600 IN MX    10 mx1.mail.example.net.
+@        3600 IN MX    10 mx2.mail.example.net.
+@        3600 IN TXT   "v=spf1 include:mail.example.net ~all"
+
+; the VPN: DNS only, short TTL, IPv4 only (no AAAA: the home router forwards v4)
+vpn        60 IN A     198.51.100.10
