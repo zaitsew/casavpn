@@ -1,0 +1,28 @@
+# External uptime monitor for vpn.example.com:443. Deploy steps: README.md.
+#
+# No account id is committed: `wrangler login` selects the account. The KV id
+# below is a placeholder; paste the id printed by
+#   npx wrangler kv namespace create STATE
+# before deploying. A KV id is not a secret, so committing it is fine.
+
+name = "casavpn-monitor"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+# Cron only: no public URL.
+workers_dev = false
+preview_urls = false
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[vars]
+# Your VPN hostname (CASAVPN_DOMAIN) and Reality port (CASAVPN_VPN_PORT):
+TARGET_HOST = "vpn.example.com"
+TARGET_PORT = "443"
+
+[[kv_namespaces]]
+binding = "STATE"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+# Secret (not here): NTFY_URL, set with `npx wrangler secret put NTFY_URL`.
