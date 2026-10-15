@@ -60,6 +60,28 @@ check "link carries the address and port" has "@vpn.example.com:443?"
 check "link carries the client id, key and flow" bash -c "grep -q '$ID0' '$T/links.txt' && grep -q 'pbk=$PBK' '$T/links.txt' && grep -q 'flow=xtls-rprx-vision' '$T/links.txt'"
 check "default tag prefix is CasaVPN-" has "#CasaVPN-alice"
 check "the file is owner-only" test "$(stat -c %a "$T/links.txt" 2>/dev/null || stat -f %Lp "$T/links.txt")" = 600
+# An existing world-readable file must not be written in place.
+: >"$T/preexisting.txt"; chmod 644 "$T/preexisting.txt"
+python3 "$RENDER" vpn.example.com "$T/preexisting.txt" <"$T/rows.json" >/dev/null 2>&1
+check "an existing 0644 output file ends up owner-only" test "$(stat -c %a "$T/preexisting.txt" 2>/dev/null || stat -f %Lp "$T/preexisting.txt")" = 600
+check "  ...with the links in it" test "$(grep -c '^vless://' "$T/preexisting.txt")" -eq 2
+check "  ...and no temp file left behind" test -z "$(ls -A "$T" | grep -E '^\..*\.tmp$' || true)"
+# A hard link to the old file must not see the new content (renamed over, not rewritten).
+echo old >"$T/linkA.txt"; ln "$T/linkA.txt" "$T/linkB.txt"; chmod 644 "$T/linkA.txt"
+python3 "$RENDER" vpn.example.com "$T/linkA.txt" <"$T/rows.json" >/dev/null 2>&1
+check "the old inode is not rewritten in place" test "$(cat "$T/linkB.txt")" = old
+# A trojan inbound and a client without an id must not abort the VLESS links.
+python3 - "$T/rows.json" "$T/rows-mixed.json" <<'PY'
+import json, sys
+rows = json.load(open(sys.argv[1]))
+trojan = dict(rows[0]); trojan["protocol"] = "trojan"
+trojan["settings"] = json.dumps({"clients": [{"password": "x", "email": "eve"}]})
+noid = json.loads(rows[0]["settings"]); noid["clients"].append({"email": "noid"})
+vless = dict(rows[0]); vless["protocol"] = "vless"; vless["settings"] = json.dumps(noid)
+json.dump([trojan, vless], open(sys.argv[2], "w"))
+PY
+OUT="$(python3 "$RENDER" vpn.example.com "$T/mixed.txt" <"$T/rows-mixed.json" 2>&1)"; RC=$?
+check "a trojan inbound and an id-less client are skipped, not fatal" test "$RC" -eq 0 -a "$(grep -c '^vless://' "$T/mixed.txt")" -eq 2
 OUT="$(python3 "$RENDER" vpn.example.com "$T/links2.txt" MyNet <"$T/rows.json" 2>&1)"
 check "custom tag prefix" has "#MyNet-bob"
 OUT="$(python3 "$RENDER" 2001:db8::1 "$T/links3.txt" <"$T/rows.json" 2>&1)"
@@ -84,6 +106,11 @@ OUT="$(cd "$T" && PATH="$T/bin:$PATH" CASAVPN_ENV=/nonexistent "$GEN" --ssh admi
 check "--ssh renders links" test "$RC" -eq 0
 check "  ...for the given target" grep -q 'admin@192.0.2.10' "$T/ssh.log"
 check "  ...and writes the output file" test "$(grep -c '^vless://' "$T/gen.txt")" -eq 2
+# The installed layout: the wrapper and the renderer sit side by side.
+mkdir -p "$T/installed"; cp "$GEN" "$ROOT/scripts/lib/render_links.py" "$T/installed/"
+OUT="$(cd "$T" && PATH="$T/bin:$PATH" CASAVPN_ENV=/nonexistent "$T/installed/gen-client-links.sh" --ssh admin@192.0.2.10 --out "$T/gen-inst.txt" vpn.example.com 2>&1)"; RC=$?
+check "the installed layout (renderer next to the script) works" bash -c "[ $RC -eq 0 ] && [ \$(grep -c '^vless://' '$T/gen-inst.txt') -eq 2 ]"
+check "  ...and the query asks for VLESS inbounds only" grep -q "protocol='vless'" "$T/ssh.log"
 printf 'CASAVPN_DOMAIN=vpn.example.org\nCASAVPN_SSH_TARGET=admin@192.0.2.11\n' >"$T/test.env"
 OUT="$(cd "$T" && PATH="$T/bin:$PATH" CASAVPN_ENV="$T/test.env" "$GEN" --out "$T/gen2.txt" 2>&1)"; RC=$?
 check "address and target default from the env file" bash -c "[ $RC -eq 0 ] && grep -q 'admin@192.0.2.11' '$T/ssh.log' && grep -q '@vpn.example.org:443' '$T/gen2.txt'"

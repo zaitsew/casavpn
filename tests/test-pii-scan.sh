@@ -86,6 +86,15 @@ expect_finding hex32 "zone $(python3 -c 'import secrets; print(secrets.token_hex
 expect_finding ntfy-topic "curl https://ntfy.sh/$(J my team- 4f9a1c)"
 expect_finding age-pubkey "recipient $(J age1 "$(python3 -c 'print("q"*58)')")"
 
+# generic rules apply to file NAMES too, not only the private denylist
+reset_repo; put "$(J bob @ gmail .com).txt" "harmless body"; commit "named after an e-mail"
+scan
+assert "an e-mail address in a file name is flagged" rc_is 1
+assert "  ...as a path-name finding" out_has "PII\\[email\\].*path name"
+reset_repo; put "host-$(J 79 .12 .34 .56).txt" "harmless body"; commit "named after an address"
+scan
+assert "an IP address in a file name is flagged" rc_is 1
+
 # --- 2. things that look similar but are fine ---------------------------------------
 reset_repo
 put fine.txt "versions 3.10.2 26.7.28 and 1.8.0; a sha256 $(python3 -c 'import hashlib; print(hashlib.sha256(b"x").hexdigest())'); 40 hex $(python3 -c 'import hashlib; print(hashlib.sha1(b"x").hexdigest())')"
@@ -173,6 +182,44 @@ assert "tree is clean once the file is deleted" rc_is 0
 scan --history
 assert "--history still finds the deleted file's content" rc_is 1
 assert "  ...and names the commit" out_has "history "
+
+# a deleted file's NAME stays in history too
+rm -rf "$REPO/.git"
+git -C "$REPO" init -q -b main
+git -C "$REPO" config user.name "CasaVPN contributors"
+git -C "$REPO" config user.email "alice@example.com"
+git -C "$REPO" config commit.gpgsign false
+reset_repo
+put keep.txt "fine"; commit "initial"
+put "$(J bob @ gmail .com).txt" "x"; commit "add a file named after an e-mail"
+rm -f "$REPO/fixtures/"*gmail*; commit "remove it"
+scan
+assert "tree is clean once the oddly named file is deleted" rc_is 0
+scan --history
+assert "--history finds a deleted file's name" rc_is 1
+assert "  ...as a history path" out_has "history path"
+
+# a merge commit: a line added only in the merge resolution, deleted afterwards
+rm -rf "$REPO/.git"
+git -C "$REPO" init -q -b main
+git -C "$REPO" config user.name "CasaVPN contributors"
+git -C "$REPO" config user.email "alice@example.com"
+git -C "$REPO" config commit.gpgsign false
+reset_repo
+put base.txt "base"; commit "base"
+git -C "$REPO" checkout -q -b side
+put side.txt "side"; commit "side work"
+git -C "$REPO" checkout -q main
+put main.txt "main"; commit "main work"
+git -C "$REPO" merge -q --no-ff --no-commit side >/dev/null 2>&1
+put evil.txt "router $(J 192 .168 .9 .9)"
+git -C "$REPO" add -A && git -C "$REPO" commit -q -m "merge side"
+git -C "$REPO" rm -q -f fixtures/evil.txt && git -C "$REPO" commit -q -m "drop the file again"
+scan
+assert "merge test: the tree is clean" rc_is 0
+scan --history
+assert "--history sees a line added only inside a merge commit" rc_is 1
+assert "  ...as an ipv4 finding" out_has "PII\\[ipv4\\]"
 
 # --- 6. identities and the author-email literal -----------------------------------------------------
 rm -rf "$REPO/.git"

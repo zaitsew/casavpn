@@ -268,7 +268,7 @@ provider_call() {
 # errors, non-JSON, or "success": false — an HTTP 200 alone proves nothing.
 cf_api() {
   local method="$1" path="$2" body="${3:-}" out
-  local args=(-sS -X "$method" -H "Content-Type: application/json"
+  local args=(-sS --noproxy '*' -X "$method" -H "Content-Type: application/json"
               --max-time 20 --connect-timeout 5 -K -)
   # Only GET is retried by curl; a retried POST could create a duplicate.
   [[ "$method" == "GET" ]] && args+=(--retry 2 --retry-delay 2 --retry-max-time 40)
@@ -333,7 +333,9 @@ discover_public_ip() {
   for entry in "${IP_SOURCES[@]}"; do
     url="${entry%%|*}"
     fmt="${entry##*|}"
-    if ! raw=$(curl -4 -sS --max-time 8 --connect-timeout 4 --retry 1 --retry-delay 1 "$url" 2>/dev/null); then
+    # --noproxy '*': the egress guard checks the DIRECT route, so a discovery that
+    # honoured HTTPS_PROXY/ALL_PROXY would publish the proxy's address instead.
+    if ! raw=$(curl -4 -sS --noproxy '*' --max-time 8 --connect-timeout 4 --retry 1 --retry-delay 1 "$url" 2>/dev/null); then
       log "ip source $url: no answer"
       continue
     fi

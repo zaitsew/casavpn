@@ -140,6 +140,22 @@ check_not "archive bytes do not contain the sentinel secret" grep -q "$SENTINEL"
 check_not "archive bytes do not contain the Reality key marker" grep -q "privateKey" "$last"
 expect "archive mode is 0600" 600 "$(mode_of "$last")"
 
+# A source file that cannot be copied must fail the run and prune nothing, even
+# when retention (KEEP=1) would otherwise delete the older archives.
+if [[ "$(id -u)" -ne 0 ]]; then
+  before="$(find "$OUT" -type f | sort | tr '\n' ' ')"
+  UNREADABLE="$FAKE/etc/nginx/conf.d/unreadable.conf"
+  echo "x" >"$UNREADABLE"; chmod 000 "$UNREADABLE"
+  CASAVPN_BACKUP_KEEP=1 bk 20260109T033000Z >"$T/unread.log" 2>&1
+  rc=$?
+  chmod 600 "$UNREADABLE"; rm -f "$UNREADABLE"
+  expect "an uncopyable source file fails the backup" 1 "$rc"
+  check "  ...and says which path" grep -q "cannot copy etc/nginx/conf.d" "$T/unread.log"
+  check "  ...nothing was pruned and no new archive appeared" test "$(find "$OUT" -type f | sort | tr '\n' ' ')" = "$before"
+else
+  echo "  skip (running as root: a mode-000 file is still readable)"
+fi
+
 # --- 4. plaintext only with the flag ---------------------------------------------------------
 
 env -u AGE_RECIPIENT bash -c "$(declare -f bk); T='$T'; FAKE='$FAKE'; OUT='$T/plain'; REPO='$REPO'; CASAVPN_BACKUP_DEST='$T/plain'; export CASAVPN_BACKUP_DEST; bk 20260201T000000Z --allow-plaintext" >"$T/plain.log" 2>&1

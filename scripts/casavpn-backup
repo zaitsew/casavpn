@@ -172,8 +172,12 @@ MISSING=()
 stage_one() {
   local rel="$1"
   if [[ -e "$ROOT/$rel" || -L "$ROOT/$rel" ]]; then
-    mkdir -p "$STAGE/rootfs/$(dirname "$rel")"
-    cp -a "$ROOT/$rel" "$STAGE/rootfs/$(dirname "$rel")/"
+    # Absent is fine (return 1 below); present but not copyable is not. stage_one
+    # runs inside conditionals, where set -e is off, so every failure must be
+    # explicit: an incomplete archive that looks successful would let retention
+    # prune the good ones.
+    mkdir -p "$STAGE/rootfs/$(dirname "$rel")" || die "cannot create the staging directory for $rel"
+    cp -a "$ROOT/$rel" "$STAGE/rootfs/$(dirname "$rel")/" || die "cannot copy $rel into the backup (unreadable?); nothing was written and nothing was pruned"
     INCLUDED+=("$rel")
     return 0
   fi

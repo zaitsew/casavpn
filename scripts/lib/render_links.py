@@ -17,6 +17,10 @@ import urllib.parse
 def build_links(rows, address, prefix="CasaVPN"):
     links = []
     for row in rows:
+        # Only VLESS inbounds have links this renderer can build; a Trojan or
+        # Shadowsocks inbound has clients without an "id".
+        if row.get("protocol", "vless") != "vless":
+            continue
         settings = json.loads(row["settings"])
         stream = json.loads(row["stream_settings"])
         port = row["port"]
@@ -35,6 +39,8 @@ def build_links(rows, address, prefix="CasaVPN"):
         }
 
         for client in settings.get("clients", []):
+            if not client.get("id"):
+                continue
             params = dict(base)
             # `flow` is per-client and must match on both ends, so carry it
             # through rather than assuming a default.
@@ -70,12 +76,26 @@ def main():
 
     body = "\n\n".join(links)
     # The file holds client UUIDs, which are credentials: owner-only from the start.
-    fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as fh:
-        fh.write(
-            "SENSITIVE: contains client UUIDs. Do not commit or share.\n"
-            f"Generated for address: {address}\n\n{body}\n"
-        )
+    # Written to a fresh 0600 temp file next to the target and renamed into
+    # place, so an existing 0644 file is never rewritten in place and no reader
+    # ever sees a half-written or world-readable version.
+    out_dir = os.path.dirname(os.path.abspath(out_path))
+    tmp = os.path.join(out_dir, f".{os.path.basename(out_path)}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(
+                "SENSITIVE: contains client UUIDs. Do not commit or share.\n"
+                f"Generated for address: {address}\n\n{body}\n"
+            )
+        os.replace(tmp, out_path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
     print(body)
     print(f"\n{len(links)} link(s) written to {out_path}", file=sys.stderr)

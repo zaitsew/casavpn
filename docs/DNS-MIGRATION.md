@@ -13,7 +13,7 @@ You move *DNS hosting* (who answers questions about the domain). The *registrati
 
 ## Step 0: remove DNSSEC (the one thing that can break everything)
 
-If the zone is signed, a **DS record** exists at the TLD's parent. Cloudflare's new
+If the zone is signed, a **DS record** exists at the zone's parent (the TLD, or e.g. co.uk for example.co.uk). Cloudflare's new
 zone starts unsigned, so after you switch nameservers every validating resolver
 (1.1.1.1, 8.8.8.8, 9.9.9.9 all validate) answers `SERVFAIL` for the whole domain
 until the old DS expires from caches.

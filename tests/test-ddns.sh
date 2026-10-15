@@ -23,12 +23,13 @@ mkdir -p "$TMP/bin"
 cat >"$TMP/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 # Fake curl: see tests/test-ddns.sh. Controlled through files in $FAKE_DIR.
-method=GET; url=""; data=""; headers=""; has_cfg=0; fail_http=0
+method=GET; url=""; data=""; headers=""; has_cfg=0; fail_http=0; np=""
 while [ $# -gt 0 ]; do
   case "$1" in
     -X) method="$2"; shift ;;
     --data|-d) data="$2"; shift ;;
     -H) headers="$headers|$2"; shift ;;
+    --noproxy) np="$2"; shift ;;
     -K) has_cfg=1; shift ;;
     -f|-fsS) fail_http=1 ;;
     --max-time|--connect-timeout|--retry|--retry-delay|--retry-max-time) shift ;;
@@ -38,6 +39,7 @@ while [ $# -gt 0 ]; do
 done
 [ "$has_cfg" = 1 ] && cat >>"$FAKE_DIR/stdin.log"
 echo "$method $url" >>"$FAKE_DIR/calls.log"
+printf 'noproxy=[%s] proxyenv=[%s] %s\n' "$np" "${HTTPS_PROXY:-}${ALL_PROXY:-}" "$url" >>"$FAKE_DIR/proxy.log"
 
 ip_reply() { [ -f "$FAKE_DIR/$1" ] || exit 22; cat "$FAKE_DIR/$1"; }
 cf_fail() { echo '{"success":false,"errors":[{"code":10000,"message":"Authentication error"}],"result":null}'; }
@@ -177,6 +179,13 @@ assert "stale IP: read-back GET after the PUT" bash -c "grep -n . '$FAKE_DIR/cal
 assert "stale IP: ntfy push says old -> new" grep -q "$OLD -> $IP" "$FAKE_DIR/ntfy.log"
 assert "stale IP: token not on any argv (sent via stdin)" grep -q 'tok_test' "$FAKE_DIR/stdin.log"
 assert "stale IP: ntfy topic not printed in the log" topic_not_in_output
+
+# --- 2b. proxies are never used for discovery or the Cloudflare API ---------------------------
+new_case; run_ddns HTTPS_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9
+assert "proxy env: still repairs the record" test "$(rec content)" = "$IP"
+assert "proxy env: every IP-discovery and API call carried --noproxy '*'" bash -c "
+  grep -E 'api.ipify|icanhazip|amazonaws|cdn-cgi|api.cloudflare' '$FAKE_DIR/proxy.log' | grep -vq 'noproxy=\[\*\]'; [ \$? -ne 0 ]"
+assert "proxy env: and the calls were actually seen" bash -c "grep -c 'noproxy=\[\*\]' '$FAKE_DIR/proxy.log' | grep -qv '^0$'"
 
 # --- 3. success:false on a write must not be recorded as success ---------------------------
 new_case; touch "$FAKE_DIR/put_success_false"; ddns

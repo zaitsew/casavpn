@@ -342,6 +342,10 @@ def main():
         stripped = allow.strip_literals(rel)
         deny_lines.append(stripped)
         deny_where.append((rel, 0, "path name"))
+        # ...and the generic rules apply to the name as well: a file called after
+        # an e-mail address or an IP leaks it even when it is empty.
+        for rule, tok in scan_text(rel, rel, allow):
+            report.add(rule, "%s (path name)" % rel, tok)
         full = os.path.join(root, rel)
         if os.path.islink(full) or not is_text(full):
             continue
@@ -379,7 +383,10 @@ def main():
                         deny_where.append(("commit %s" % sha, n, "message/identity"))
 
         if args.history:
-            out = git(["log", "--all", "-p", "--unified=0", "--no-color", "--format=\x1eCOMMIT %H"], root)
+            # -m: a merge commit is diffed against each parent in turn, so a line
+            # added only while resolving a merge (and deleted again afterwards) is
+            # seen. Plain `git log -p` prints nothing for merges.
+            out = git(["log", "--all", "-m", "-p", "--unified=0", "--no-color", "--format=\x1eCOMMIT %H"], root)
             sha, cur = "", ""
             for line in out.stdout.decode("utf-8", "replace").splitlines():
                 if line.startswith("\x1eCOMMIT "):
@@ -396,6 +403,23 @@ def main():
                     if patterns and not allow.skipped("denylist", cur):
                         deny_lines.append(allow.strip_literals(body))
                         deny_where.append(("history %s %s" % (sha, cur), 0, "added line"))
+
+    # --- history: every path name ever committed (a deleted file keeps its name) ---
+    if args.history and not args.no_git_log:
+        out = git(["log", "--all", "-m", "--name-only", "--no-color", "-z", "--format="], root)
+        seen = set(files)
+        for rel in out.stdout.decode("utf-8", "replace").split("\0"):
+            rel = rel.strip("\n")
+            if not rel or rel in seen:
+                continue
+            seen.add(rel)
+            if allow.path_skipped(rel):
+                continue
+            for rule, tok in scan_text(rel, rel, allow):
+                report.add(rule, "history path %s" % rel, tok)
+            if patterns:
+                deny_lines.append(allow.strip_literals(rel))
+                deny_where.append(("history path %s" % rel, 0, "path name"))
 
     # --- private denylist ----------------------------------------------------------
     if patterns:

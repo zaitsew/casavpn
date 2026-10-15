@@ -11,13 +11,13 @@
 #   dns-diff.sh --resolvers [<ref-ns>] [--domain <zone>]
 #       Post-cutover watch. Ask 1.1.1.1, 8.8.8.8 and 9.9.9.9 for the key
 #       records and compare them with the authoritative answer. <ref-ns>
-#       defaults to the first nameserver the TLD parent delegates to.
+#       defaults to the first nameserver the zone's parent delegates to.
 #
 # The zone is --domain, $DNSDIFF_DOMAIN, or the registered domain of
 # CASAVPN_DOMAIN (the last two labels; set DNSDIFF_DOMAIN for a zone such
 # as example.co.uk).
 #
-# Both modes check DNSSEC: if a DS record exists at the TLD parent, the zone
+# Both modes check DNSSEC: if a DS record exists at the zone's parent, the zone
 # is signed, and switching to an unsigned zone makes validating resolvers
 # (1.1.1.1, 8.8.8.8, 9.9.9.9 all validate) return SERVFAIL for the whole
 # domain, mail included. In the nameserver mode that is a blocker.
@@ -37,8 +37,10 @@ DOMAIN="${DNSDIFF_DOMAIN:-}"
 INVENTORY="${DNSDIFF_INVENTORY:-$ROOT/config/dns/inventory.txt}"
 ALLOWLIST="${DNSDIFF_ALLOWLIST:-$ROOT/config/dns/allowlist.txt}"
 KEY_FILE="${DNSDIFF_KEY_RECORDS:-$ROOT/config/dns/key-records.txt}"
-# Parent (TLD) servers asked about the DS; the first one also gives the
-# delegation. Empty means "discover them from the TLD's NS set" (see main).
+# Parent servers asked about the DS: the servers that are AUTHORITATIVE for the
+# zone holding the delegation (the TLD for example.com, but "co.uk" for
+# example.co.uk). The first one also gives the delegation. Empty means "walk
+# down from the root until a server answers authoritatively" (discover_parents).
 PARENTS="${DNSDIFF_PARENT:-}"
 PARENT=""
 RESOLVERS="${DNSDIFF_RESOLVERS:-1.1.1.1 8.8.8.8 9.9.9.9}"
@@ -68,13 +70,59 @@ default_domain() {
   awk -F. '{ n = NF; if (n < 2) { print $0 } else { print $(n-1) "." $n } }' <<<"$host"
 }
 
-# discover_parents: the TLD's own name servers, two of them.
+# ds_probe <server>: ask one server for the zone's DS, without recursion.
+# Prints one of:
+#   present <ds>        a DS record was returned
+#   absent              NOERROR, AUTHORITATIVE (aa flag), and no DS
+#   referral <ns...>    not authoritative: it points at servers of a zone between
+#                       it and DOMAIN. This is NEVER "absent": the question has
+#                       not reached the zone that holds the delegation.
+#   unknown             timeout, SERVFAIL, REFUSED, or anything else
+ds_probe() {
+  local srv="$1" out rc status flags ds ns
+  out="$(dig +norecurse +noall +comments +answer +authority +time=3 +tries=2 DS "$DOMAIN" "@$srv" 2>/dev/null </dev/null)"
+  rc=$?
+  status="$(printf '%s\n' "$out" | sed -n 's/.*status: \([A-Z]*\).*/\1/p' | head -n1)"
+  if [ "$rc" -ne 0 ] || [ "$status" != "NOERROR" ]; then echo unknown; return; fi
+  ds="$(printf '%s\n' "$out" | awk '$1 !~ /^;/ && $4 == "DS" {
+    sub(/^[^ \t]+[ \t]+[^ \t]+[ \t]+[^ \t]+[ \t]+[^ \t]+[ \t]*/, ""); print; exit }')"
+  if [ -n "$ds" ]; then echo "present $ds"; return; fi
+  flags="$(printf '%s\n' "$out" | sed -n 's/.*flags: \([a-z ]*\);.*/\1/p' | head -n1)"
+  case " $flags " in *" aa "*) echo absent; return ;; esac
+  # A referral: NS records in the authority section whose owner is a proper
+  # suffix of the zone (a deeper zone cut on the way down).
+  ns="$(printf '%s\n' "$out" | awk -v dom="$DOMAIN" '
+    BEGIN { dom = tolower(dom) }
+    $1 !~ /^;/ && $4 == "NS" {
+      o = tolower($1); sub(/\.$/, "", o); t = $5; sub(/\.$/, "", t)
+      if (o != "" && o != dom && length(dom) > length(o) && substr(dom, length(dom) - length(o)) == "." o) print t
+    }' | head -n 2 | tr '\n' ' ')"
+  ns="${ns% }"
+  if [ -n "$ns" ]; then echo "referral $ns"; else echo unknown; fi
+}
+
+# discover_parents: walk down from the root, following referrals, until a server
+# answers authoritatively about the DS: those servers are the zone's real
+# parent. Prints them (two at most). Fails if the walk dead-ends or loops.
 discover_parents() {
-  local tld="${DOMAIN##*.}" out
-  out="$(dig +short NS "$tld." 2>/dev/null </dev/null | sed 's/\.$//' | head -n 2 | tr '\n' ' ')"
-  out="${out% }"
-  [ -n "$out" ] || return 1
-  echo "$out"
+  local servers s r next="" auth
+  servers="$(dig +short NS . 2>/dev/null </dev/null | sed 's/\.$//' | head -n 2 | tr '\n' ' ')"
+  servers="${servers% }"
+  [ -n "$servers" ] || servers="a.root-servers.net b.root-servers.net"
+  for _ in 1 2 3 4 5 6 7 8; do
+    next=""; auth=""
+    for s in $servers; do
+      r="$(ds_probe "$s")"
+      case "$r" in
+        referral*) [ -n "$next" ] || next="${r#referral }" ;;
+        present*|absent) auth="$auth $s" ;;
+      esac
+    done
+    if [ -n "$auth" ] && [ -z "$next" ]; then echo "${auth# }"; return 0; fi
+    if [ -n "$next" ]; then servers="$next"; continue; fi
+    return 1
+  done
+  return 1
 }
 
 usage() {
@@ -172,18 +220,18 @@ compare() {
 }
 
 # ds_state: prints "present <ds>" | "absent" | "unknown".
-# "absent" needs a NOERROR answer with no DS from every parent server asked; a
-# timeout, SERVFAIL or REFUSED is "unknown", never proof that the DS is gone.
+# "absent" needs an AUTHORITATIVE NOERROR answer with no DS from every parent
+# server asked. A timeout, SERVFAIL, REFUSED or a referral is "unknown", never
+# proof that the DS is gone.
 ds_state() {
-  local srv out rc status ds found="" unknown=0
+  local srv r found="" unknown=0
   for srv in $PARENTS; do
-    out="$(dig +noall +comments +answer +time=3 +tries=2 DS "$DOMAIN" "@$srv" 2>/dev/null </dev/null)"
-    rc=$?
-    status="$(printf '%s\n' "$out" | sed -n 's/.*status: \([A-Z]*\).*/\1/p' | head -n1)"
-    if [ "$rc" -ne 0 ] || [ "$status" != "NOERROR" ]; then unknown=1; continue; fi
-    ds="$(printf '%s\n' "$out" | awk '$1 !~ /^;/ && $4 == "DS" {
-      sub(/^[^ \t]+[ \t]+[^ \t]+[ \t]+[^ \t]+[ \t]+[^ \t]+[ \t]*/, ""); print; exit }')"
-    [ -n "$ds" ] && found="$ds"
+    r="$(ds_probe "$srv")"
+    case "$r" in
+      present*) found="${r#present }" ;;
+      absent) ;;
+      *) unknown=1 ;;
+    esac
   done
   if [ -n "$found" ]; then echo "present $found"
   elif [ "$unknown" -eq 1 ]; then echo "unknown"
@@ -194,7 +242,7 @@ banner_ds() {
   cat <<EOF
 
   ##########################################################################
-  #  DNSSEC IS ON: a DS record exists at the TLD parent for $DOMAIN
+  #  DNSSEC IS ON: a DS record exists at the parent of $DOMAIN
   #
   #  $1
   #
@@ -231,7 +279,7 @@ mode_ns() {
   echo
   report_diffs
 
-  echo "DNSSEC check at the TLD parent ($PARENTS):"
+  echo "DNSSEC check at the zone's parent ($PARENTS):"
   ds="$(ds_state)"
   case "$ds" in
     present*)
@@ -327,7 +375,7 @@ main() {
     DOMAIN="$(default_domain)" || { echo "Which zone? Pass --domain <zone> or set DNSDIFF_DOMAIN." >&2; exit 3; }
   fi
   if [ -z "$PARENTS" ]; then
-    PARENTS="$(discover_parents)" || { echo "Could not discover the TLD name servers; set DNSDIFF_PARENT." >&2; exit 3; }
+    PARENTS="$(discover_parents)" || { echo "Could not find the zone's parent name servers by walking down from the root; set DNSDIFF_PARENT." >&2; exit 3; }
   fi
   PARENT="${PARENTS%% *}"
   load_key_records

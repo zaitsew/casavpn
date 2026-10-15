@@ -64,7 +64,15 @@ if [ -z "$MODE" ]; then
   else echo "Say where the database is: --ssh <user@host> or --local." >&2; exit 2; fi
 fi
 
-QUERY='select port, settings, stream_settings from inbounds where enable=1;'
+# The renderer sits in lib/ in a checkout and next to this script once installed
+# (/usr/local/lib/casavpn); fall back to the installed copy.
+RENDER=""
+for c in "$HERE/lib/render_links.py" "$HERE/render_links.py" /usr/local/lib/casavpn/render_links.py; do
+  if [ -r "$c" ]; then RENDER="$c"; break; fi
+done
+[ -n "$RENDER" ] || { echo "render_links.py not found next to this script or in /usr/local/lib/casavpn" >&2; exit 1; }
+
+QUERY="select port, protocol, settings, stream_settings from inbounds where enable=1 and protocol='vless';"
 
 # -json keeps the embedded config blobs intact; they are multi-line JSON, so a
 # line-oriented separator would tear them apart.
@@ -72,11 +80,11 @@ if [ "$MODE" = ssh ]; then
   command -v ssh >/dev/null || { echo "ssh not found" >&2; exit 1; }
   echo "Reading inbound configuration from $TARGET ..." >&2
   ssh -o BatchMode=yes "$TARGET" "sudo sqlite3 -json /etc/x-ui/x-ui.db \"$QUERY\"" |
-    python3 "$HERE/lib/render_links.py" "$ADDRESS" "$OUT"
+    python3 "$RENDER" "$ADDRESS" "$OUT"
 else
   command -v sqlite3 >/dev/null || { echo "sqlite3 not found (apt install sqlite3)" >&2; exit 1; }
   echo "Reading inbound configuration from /etc/x-ui/x-ui.db ..." >&2
   if [ "$(id -u)" -eq 0 ]; then sqlite3 -json /etc/x-ui/x-ui.db "$QUERY"; else sudo sqlite3 -json /etc/x-ui/x-ui.db "$QUERY"; fi |
-    python3 "$HERE/lib/render_links.py" "$ADDRESS" "$OUT"
+    python3 "$RENDER" "$ADDRESS" "$OUT"
 fi
 chmod 600 "$OUT" 2>/dev/null || true

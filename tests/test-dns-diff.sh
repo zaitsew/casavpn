@@ -25,8 +25,10 @@ for a in "$@"; do
 done
 type="${pos[0]}"; name="${pos[1]}"
 if [ -n "$server" ]; then case " ${FAKE_DIG_FAIL:-} " in *" $server "*) exit 9 ;; esac; fi
-status=NOERROR; body=""
+status=NOERROR; body=""; flags="qr aa rd"; authority=""
 f="$FAKE_DIG_DIR/$server/$name.$type"
+# A <name>.<TYPE>.referral file turns the answer into a non-authoritative referral.
+if [ -f "$f.referral" ]; then flags="qr rd"; authority="$(cat "$f.referral")"; fi
 if [ -f "$f" ]; then
   first="$(head -n1 "$f")"
   if [[ "$first" == STATUS:* ]]; then status="${first#STATUS:}"; body="$(tail -n +2 "$f")"; else body="$(cat "$f")"; fi
@@ -35,7 +37,9 @@ if [ "$short" = 1 ]; then
   printf '%s\n' "$body" | awk 'NF { sub(/^[^ \t]+[ \t]+[^ \t]+[ \t]+[^ \t]+[ \t]+[^ \t]+[ \t]*/, ""); print }'
 else
   echo ";; ->>HEADER<<- opcode: QUERY, status: $status, id: 1"
+  echo ";; flags: $flags; QUERY: 1, ANSWER: 0, AUTHORITY: 0, ADDITIONAL: 0"
   printf '%s\n' "$body"
+  [ -z "$authority" ] || printf '%s\n' "$authority"
 fi
 exit 0
 FAKE
@@ -229,12 +233,48 @@ expect "zone defaults to the last two labels of CASAVPN_DOMAIN" 0 "Comparing exa
 OUT="$(env -u DNSDIFF_DOMAIN -u CASAVPN_DOMAIN CASAVPN_ENV=/nonexistent "$SCRIPT" old new 2>&1)"; RC=$?
 expect "no zone anywhere is an error that says what to do" 3 "Pass --domain"
 
-# 12d. the TLD name servers are discovered when DNSDIFF_PARENT is unset
-reset; zone old; zone new; no_ds
-printf 'com. 300 IN NS tld1.test.\ncom. 300 IN NS tld2.test.\n' > "$FAKE_DIG_DIR/com..NS"
-for p in tld1.test tld2.test; do mkdir -p "$FAKE_DIG_DIR/$p"; : > "$FAKE_DIG_DIR/$p/example.com.DS"; done
+# 12d. the parent servers are found by walking down from the root
+reset; zone old; zone new
+mkdir -p "$FAKE_DIG_DIR/root1.test" "$FAKE_DIG_DIR/tld1.test" "$FAKE_DIG_DIR/tld2.test"
+printf '. 300 IN NS root1.test.\n' > "$FAKE_DIG_DIR/..NS"
+printf 'com. 172800 IN NS tld1.test.\ncom. 172800 IN NS tld2.test.\n' > "$FAKE_DIG_DIR/root1.test/example.com.DS.referral"
+: > "$FAKE_DIG_DIR/root1.test/example.com.DS"
+for p in tld1.test tld2.test; do : > "$FAKE_DIG_DIR/$p/example.com.DS"; done
 OUT="$(env -u DNSDIFF_PARENT "$SCRIPT" old new 2>&1)"; RC=$?
-expect "parent servers are discovered from the TLD NS set" 0 "tld1.test tld2.test"
+expect "parent servers are found by walking from the root" 0 "tld1.test tld2.test"
+
+# 12e. a zone below a separately delegated suffix: the TLD only refers. The old
+# behaviour read that referral as "DS absent"; the DS lives one level further down.
+reset; zone old; zone new
+mkdir -p "$FAKE_DIG_DIR/root1.test" "$FAKE_DIG_DIR/uk1.test" "$FAKE_DIG_DIR/couk1.test"
+printf '. 300 IN NS root1.test.\n' > "$FAKE_DIG_DIR/..NS"
+: > "$FAKE_DIG_DIR/root1.test/example.co.uk.DS"
+printf 'uk. 172800 IN NS uk1.test.\n' > "$FAKE_DIG_DIR/root1.test/example.co.uk.DS.referral"
+: > "$FAKE_DIG_DIR/uk1.test/example.co.uk.DS"
+printf 'co.uk. 172800 IN NS couk1.test.\n' > "$FAKE_DIG_DIR/uk1.test/example.co.uk.DS.referral"
+printf 'example.co.uk. 3600 IN DS 12345 8 2 0000000000000000000000000000000000000000000000000000000000000000\n' > "$FAKE_DIG_DIR/couk1.test/example.co.uk.DS"
+OUT="$(env -u DNSDIFF_PARENT "$SCRIPT" old new --domain example.co.uk 2>&1)"; RC=$?
+expect "a DS below a delegated suffix is found, not mistaken for absent" 2 "DNSSEC IS ON"
+if printf '%s\n' "$OUT" | grep -q "couk1.test"; then ok "  ...and names the real parent server"; else bad "  ...and names the real parent server"; fi
+# ...and the same walk with no DS at the real parent is clean
+: > "$FAKE_DIG_DIR/couk1.test/example.co.uk.DS"
+OUT="$(env -u DNSDIFF_PARENT "$SCRIPT" old new --domain example.co.uk 2>&1)"; RC=$?
+expect "the walk ends at the real parent; no DS there is absent" 0 "couk1.test"
+
+# 12f. explicit parents that only REFER are unknown, never absent
+reset; zone old; zone new; no_ds
+printf 'com. 172800 IN NS tld1.test.\n' > "$FAKE_DIG_DIR/parent.test/example.com.DS.referral"
+run old new
+expect "a referral from a configured parent is not proof of absence" 3 "Could not get a clean"
+
+# 12g. a referral loop ends, with an error
+reset; zone old; zone new
+mkdir -p "$FAKE_DIG_DIR/root1.test" "$FAKE_DIG_DIR/loop1.test"
+printf '. 300 IN NS root1.test.\n' > "$FAKE_DIG_DIR/..NS"
+printf 'com. 172800 IN NS loop1.test.\n' > "$FAKE_DIG_DIR/root1.test/example.com.DS.referral"
+printf 'com. 172800 IN NS root1.test.\n' > "$FAKE_DIG_DIR/loop1.test/example.com.DS.referral"
+OUT="$(env -u DNSDIFF_PARENT "$SCRIPT" old new 2>&1)"; RC=$?
+expect "a referral loop is an error, not a pass" 3 "walking down from the root"
 
 echo "dns-diff.sh --resolvers"
 
