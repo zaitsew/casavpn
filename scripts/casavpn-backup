@@ -1,0 +1,312 @@
+#!/usr/bin/env bash
+#
+# casavpn-backup — build an encrypted, restorable snapshot of the VPN host.
+#
+# Runs ON the host, as root (casavpn-backup.service does this nightly). It
+# collects everything that is painful to rebuild by hand:
+#
+#   /etc/x-ui/x-ui.db                    panel DB: Reality private key, clients
+#                                        (consistent sqlite snapshot, WAL included)
+#   /etc/casavpn/                        your env file (Cloudflare token!), the
+#                                        generated panel credentials
+#   /etc/nftables.conf                   host firewall
+#   /etc/ssh/sshd_config.d/              sshd hardening drop-ins
+#   /etc/fail2ban/{jail.local,jail.d/}   fail2ban jails
+#   /etc/nginx/{sites-available,sites-enabled,conf.d}   vhosts + their activation
+#   /etc/letsencrypt/                    certificates, account, renewal config
+#   /etc/systemd/system/{x-ui,casavpn-*}.*  units and timers
+#   /usr/local/bin/casavpn-*, /usr/local/lib/casavpn   our helper scripts as installed
+#   MANIFEST + dpkg-selections.txt       versions (3x-ui, Xray, kernel, packages)
+#
+# The archive holds PRIVATE KEYS, API TOKENS and client UUIDs, so it is never
+# written in the clear: tar | compress | age streams straight into a ".partial"
+# file next to the destination and is renamed into place only when every stage
+# succeeded. The only plaintext that ever exists is the staging copy, which
+# lives in RAM (/dev/shm) and is removed on exit.
+#
+# Configuration (/etc/casavpn/casavpn.env, parsed not sourced; the environment wins):
+#   AGE_RECIPIENT           age public key (age1...) the archive is encrypted to.
+#                           Required unless --allow-plaintext. Public by design:
+#                           the matching identity (private key) stays OFF this host.
+#   CASAVPN_BACKUP_GROUP    optional group that may read the encrypted archives,
+#                           so a non-root user can pull them (see docs/BACKUP.md)
+#   CASAVPN_BACKUP_KEEP     how many archives to keep (default 14)
+#
+# Test hooks (all paths default to the real ones):
+#   CASAVPN_BACKUP_ROOT     prefix for every source path (default: empty = real /)
+#   CASAVPN_BACKUP_DEST     output directory (default: $ROOT/var/backups/casavpn)
+#   CASAVPN_BACKUP_ENV      env file (default: $ROOT/etc/casavpn/casavpn.env)
+#   CASAVPN_BACKUP_TMP      staging parent dir (default: /dev/shm, else $TMPDIR)
+#   CASAVPN_BACKUP_STAMP    timestamp in the file name (default: now, UTC)
+#
+# Usage: casavpn-backup [--allow-plaintext]
+# Prints the path of the archive it wrote on stdout (everything else: stderr).
+# Stays compatible with bash 3.2 so the offline test also runs on macOS.
+
+set -euo pipefail
+umask 077
+export COPYFILE_DISABLE=1   # macOS tar: no AppleDouble ._ files (test runs only)
+
+ALLOW_PLAINTEXT=0
+for arg in "$@"; do
+  case "$arg" in
+    --allow-plaintext) ALLOW_PLAINTEXT=1 ;;
+    -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
+    *) echo "unknown argument: $arg" >&2; exit 64 ;;
+  esac
+done
+
+log() { printf '%s\n' "$*" >&2; }
+die() { printf 'casavpn-backup: %s\n' "$*" >&2; exit 1; }
+
+ROOT="${CASAVPN_BACKUP_ROOT:-}"
+ROOT="${ROOT%/}"
+
+if [[ -z "$ROOT" && "$(id -u)" -ne 0 ]]; then
+  die "must run as root (it reads private keys); try: sudo $0"
+fi
+
+# --- configuration -----------------------------------------------------------
+
+ENV_FILE="${CASAVPN_BACKUP_ENV:-$ROOT/etc/casavpn/casavpn.env}"
+
+# The env file is parsed, never sourced: it is data, not code. Only the keys
+# this script owns are read, and a value already in the environment wins.
+AGE_RECIPIENT="${AGE_RECIPIENT:-}"
+CASAVPN_BACKUP_GROUP="${CASAVPN_BACKUP_GROUP:-}"
+CASAVPN_BACKUP_KEEP="${CASAVPN_BACKUP_KEEP:-}"
+load_env() {
+  local line key val
+  [[ -r "$1" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    case "$line" in ''|'#'*) continue ;; esac
+    [[ "$line" == *=* ]] || continue
+    line="${line#export }"
+    key="${line%%=*}"
+    val="${line#*=}"
+    key="${key//[[:space:]]/}"
+    case "$val" in
+      \"*\") val="${val#\"}"; val="${val%\"}" ;;
+      \'*\') val="${val#\'}"; val="${val%\'}" ;;
+    esac
+    case "$key" in
+      AGE_RECIPIENT|CASAVPN_BACKUP_GROUP|CASAVPN_BACKUP_KEEP)
+        if [[ -z "${!key}" ]]; then printf -v "$key" '%s' "$val"; fi ;;
+    esac
+  done <"$1"
+}
+load_env "$ENV_FILE"
+
+KEEP="${CASAVPN_BACKUP_KEEP:-14}"
+GROUP="${CASAVPN_BACKUP_GROUP:-}"
+DEST="${CASAVPN_BACKUP_DEST:-$ROOT/var/backups/casavpn}"
+STAMP="${CASAVPN_BACKUP_STAMP:-$(date -u +%Y%m%dT%H%M%SZ)}"
+
+[[ "$KEEP" =~ ^[0-9]+$ && "$KEEP" -ge 1 ]] || die "CASAVPN_BACKUP_KEEP must be a positive integer"
+[[ "$STAMP" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] || die "CASAVPN_BACKUP_STAMP must look like 20261015T033000Z"
+
+if [[ "$ALLOW_PLAINTEXT" -eq 0 ]]; then
+  [[ -n "$AGE_RECIPIENT" ]] \
+    || die "AGE_RECIPIENT is not set (put it in /etc/casavpn/casavpn.env). Refusing to write an unencrypted archive; pass --allow-plaintext to override."
+  recipient_re='^(age1[a-z0-9]+|ssh-(ed25519|rsa) .+)$'
+  [[ "$AGE_RECIPIENT" =~ $recipient_re ]] \
+    || die "AGE_RECIPIENT does not look like an age public key (age1...)"
+  command -v age >/dev/null || die "age is not installed (apt install age)"
+else
+  log "WARNING: --allow-plaintext: the archive will NOT be encrypted"
+fi
+
+command -v sqlite3 >/dev/null || die "sqlite3 is not installed (apt install sqlite3)"
+command -v tar >/dev/null || die "tar is not installed"
+
+if command -v zstd >/dev/null; then
+  COMPRESS=(zstd -q -c)
+  EXT="tar.zst"
+else
+  command -v gzip >/dev/null || die "neither zstd nor gzip is installed"
+  log "zstd not found, falling back to gzip (apt install zstd)"
+  COMPRESS=(gzip -c)
+  EXT="tar.gz"
+fi
+
+DB="$ROOT/etc/x-ui/x-ui.db"
+[[ -f "$DB" ]] || die "panel database not found: $DB"
+
+# --- staging area (RAM, mode 0700, always removed) ---------------------------
+
+pick_tmp_parent() {
+  if [[ -n "${CASAVPN_BACKUP_TMP:-}" ]]; then printf '%s' "$CASAVPN_BACKUP_TMP"
+  elif [[ -d /dev/shm && -w /dev/shm ]]; then printf '/dev/shm'
+  else printf '%s' "${TMPDIR:-/tmp}"
+  fi
+}
+
+STAGE=""
+PARTIAL=""
+cleanup() {
+  if [[ -n "$PARTIAL" ]]; then rm -f "$PARTIAL"; fi
+  if [[ -n "$STAGE" && -d "$STAGE" ]]; then rm -rf "$STAGE"; fi
+  return 0
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+
+STAGE="$(mktemp -d "$(pick_tmp_parent)/casavpn-backup.XXXXXXXX")"
+mkdir -p "$STAGE/rootfs/etc/x-ui"
+
+# --- 1. consistent database snapshot -----------------------------------------
+# A plain cp of a live WAL database can miss the -wal file or tear a page.
+# .backup runs the sqlite online-backup API, which reads through the WAL.
+
+SNAP="$STAGE/rootfs/etc/x-ui/x-ui.db"
+sqlite3 "$DB" ".timeout 15000" ".backup '$SNAP'" \
+  || die "sqlite3 .backup of $DB failed"
+integrity="$(sqlite3 "$SNAP" 'PRAGMA integrity_check;')"
+[[ "$integrity" == "ok" ]] || die "snapshot failed integrity_check: $integrity"
+
+# --- 2. configuration files --------------------------------------------------
+
+INCLUDED=()
+MISSING=()
+stage_one() {
+  local rel="$1"
+  if [[ -e "$ROOT/$rel" || -L "$ROOT/$rel" ]]; then
+    mkdir -p "$STAGE/rootfs/$(dirname "$rel")"
+    cp -a "$ROOT/$rel" "$STAGE/rootfs/$(dirname "$rel")/"
+    INCLUDED+=("$rel")
+    return 0
+  fi
+  return 1
+}
+# stage_path <relative path | glob>: a glob that matches nothing is "missing".
+stage_path() {
+  local rel="$1" m found=0
+  case "$rel" in
+    *'*'*)
+      for m in "$ROOT"/$rel; do
+        [[ -e "$m" || -L "$m" ]] || continue
+        stage_one "${m#"$ROOT"/}" && found=1
+      done
+      [[ "$found" -eq 1 ]] || MISSING+=("$rel") ;;
+    *) stage_one "$rel" || MISSING+=("$rel") ;;
+  esac
+}
+
+CONFIG_PATHS=(
+  etc/nftables.conf
+  etc/ssh/sshd_config.d
+  etc/fail2ban/jail.local
+  etc/fail2ban/jail.d
+  etc/nginx/sites-available
+  etc/nginx/sites-enabled
+  etc/nginx/conf.d
+  etc/casavpn
+  etc/letsencrypt
+  etc/apt/apt.conf.d/20auto-upgrades
+  etc/systemd/system/x-ui.service
+  'etc/systemd/system/casavpn-*'
+  'usr/local/bin/casavpn-*'
+  usr/local/lib/casavpn
+)
+for p in "${CONFIG_PATHS[@]}"; do stage_path "$p"; done
+
+# --- 3. version manifest -----------------------------------------------------
+
+first_line() { "$@" 2>&1 | head -n 1 || true; }
+
+XUI_BIN="$ROOT/usr/local/x-ui/x-ui"
+XUI_VERSION="unknown"
+if [[ -x "$XUI_BIN" ]]; then XUI_VERSION="$(first_line "$XUI_BIN" -v)"; fi
+
+XRAY_VERSION="unknown"
+for x in "$ROOT"/usr/local/x-ui/bin/xray-linux-*; do
+  if [[ -x "$x" ]]; then XRAY_VERSION="$(first_line "$x" -version)"; break; fi
+done
+
+OS_PRETTY="unknown"
+if [[ -r "$ROOT/etc/os-release" ]]; then
+  OS_PRETTY="$(sed -n 's/^PRETTY_NAME=//p' "$ROOT/etc/os-release" | tr -d '"')"
+fi
+
+if command -v dpkg >/dev/null && dpkg --get-selections >"$STAGE/dpkg-selections.txt" 2>/dev/null; then
+  :
+else
+  echo "# dpkg not available when this backup was taken" >"$STAGE/dpkg-selections.txt"
+fi
+
+sha256_of() {
+  if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1
+  else shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+{
+  echo "format=casavpn-backup-v1"
+  echo "created_utc=$STAMP"
+  echo "hostname=$(hostname 2>/dev/null || echo unknown)"
+  echo "kernel=$(uname -sr)"
+  echo "os=$OS_PRETTY"
+  echo "xui_version=$XUI_VERSION"
+  echo "xray_version=$XRAY_VERSION"
+  echo "db_sha256=$(sha256_of "$SNAP")"
+  echo "compression=$EXT"
+  echo "encrypted=$([[ "$ALLOW_PLAINTEXT" -eq 1 ]] && echo no || echo yes)"
+  for p in "${INCLUDED[@]}"; do echo "included=/$p"; done
+  if [[ ${#MISSING[@]} -gt 0 ]]; then
+    for p in "${MISSING[@]}"; do echo "missing=/$p"; done
+  fi
+} >"$STAGE/MANIFEST"
+
+# --- 4. tar | compress | age -> .partial -> atomic rename --------------------
+
+mkdir -p "$DEST"
+if [[ -n "$GROUP" && "$ALLOW_PLAINTEXT" -eq 0 ]]; then
+  chgrp "$GROUP" "$DEST" || die "cannot chgrp $DEST to $GROUP (does the group exist?)"
+  chmod 0750 "$DEST"
+else
+  chmod 0700 "$DEST"
+fi
+
+if [[ "$ALLOW_PLAINTEXT" -eq 1 ]]; then
+  FINAL="$DEST/casavpn-$STAMP.$EXT"
+else
+  FINAL="$DEST/casavpn-$STAMP.$EXT.age"
+fi
+PARTIAL="$DEST/.casavpn-$STAMP.partial"
+
+if [[ "$ALLOW_PLAINTEXT" -eq 1 ]]; then
+  tar -C "$STAGE" -cf - . | "${COMPRESS[@]}" >"$PARTIAL"
+else
+  tar -C "$STAGE" -cf - . | "${COMPRESS[@]}" | age -r "$AGE_RECIPIENT" >"$PARTIAL"
+fi
+
+[[ -s "$PARTIAL" ]] || die "produced an empty archive"
+if [[ "$ALLOW_PLAINTEXT" -eq 0 ]]; then
+  [[ "$(head -c 21 "$PARTIAL")" == "age-encryption.org/v1" ]] \
+    || die "output is not an age file; refusing to keep it"
+fi
+
+if [[ -n "$GROUP" && "$ALLOW_PLAINTEXT" -eq 0 ]]; then
+  chgrp "$GROUP" "$PARTIAL"
+  chmod 0640 "$PARTIAL"
+else
+  chmod 0600 "$PARTIAL"
+fi
+mv -f "$PARTIAL" "$FINAL"
+PARTIAL=""
+
+# --- 5. retention (only after the new archive is safely in place) ------------
+
+# File names embed a UTC timestamp, so name order is age order.
+n=0
+while IFS= read -r old; do
+  n=$((n + 1))
+  if [[ "$n" -gt "$KEEP" ]]; then
+    log "pruning $old"
+    rm -f "$old"
+  fi
+done < <(find "$DEST" -maxdepth 1 -name 'casavpn-*.tar.*' -type f | sort -r)
+
+log "backup ok: $(basename "$FINAL") ($(wc -c <"$FINAL" | tr -d ' ') bytes, ${#INCLUDED[@]} paths, ${#MISSING[@]} not present)"
+printf '%s\n' "$FINAL"

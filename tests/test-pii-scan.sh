@@ -124,7 +124,7 @@ scan
 assert "denylist entry #2 matches (ERE)" out_has "denylist entry #2"
 
 reset_repo
-put f.txt "$(printf '%s' "$CANARY" | tr 'a-z' 'A-Z') in capitals"
+put f.txt "$(printf '%s' "$CANARY" | tr '[:lower:]' '[:upper:]') in capitals"
 commit "case"
 scan
 assert "denylist is case-insensitive" out_has "denylist entry #1"
@@ -201,7 +201,7 @@ git -C "$REPO" config user.email "alice@example.com"
 git -C "$REPO" commit -q --amend --reset-author --no-edit --allow-empty
 
 # --- 7. a missing denylist warns loudly but does not fail ----------------------------------------------
-scan_nodeny() { OUT=$(cd "$REPO" && env CASAVPN_PII_DENYLIST="$T/does-not-exist" HOME="$T/nohome" python3 tools/pii-scan.py "$@" 2>&1) && RC=0 || RC=$?; }
+scan_nodeny() { OUT=$(cd "$REPO" && env CASAVPN_PII_DENYLIST="$T/does-not-exist" HOME="$T/nohome" python3 tools/pii-scan.py 2>&1) && RC=0 || RC=$?; }
 scan_nodeny
 assert "no denylist: still exit 0 on a clean repo" rc_is 0
 assert "no denylist: warns loudly" out_has "WARNING: no private denylist"
