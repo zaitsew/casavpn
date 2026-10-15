@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+#
+# casavpn-minver: set (or check) minClientVer on the Reality inbound.
+#
+#   casavpn-minver            set it to CASAVPN_MIN_CLIENT_VER and restart x-ui
+#   casavpn-minver --check    only verify; exit 1 if it differs
+#
+# Run it once after you create the inbound in the panel, and any time the
+# healthcheck says the value is wrong. casavpn-upgrade does it for you after
+# every panel upgrade.
+
+set -euo pipefail
+
+LIB=""
+for c in "$(dirname "${BASH_SOURCE[0]}")/lib" /usr/local/lib/casavpn; do
+  if [ -r "$c/common.sh" ]; then LIB="$c"; break; fi
+done
+[ -n "$LIB" ] || { echo "casavpn-minver: cannot find common.sh" >&2; exit 1; }
+# shellcheck source=scripts/lib/common.sh
+. "$LIB/common.sh"
+
+MODE="set"
+case "${1:-}" in
+  --check) MODE=check ;;
+  -h|--help) awk 'NR < 3 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
+  "") ;;
+  *) echo "usage: casavpn-minver [--check]" >&2; exit 2 ;;
+esac
+
+load_env "$ENV_FILE" || die "cannot read $ENV_FILE"
+apply_defaults
+DB="${CASAVPN_DB:-/etc/x-ui/x-ui.db}"
+[ "$(id -u)" -eq 0 ] || die "run as root (sudo casavpn-minver)"
+
+if [ "$MODE" = check ]; then
+  exec python3 "$LIB/set_min_client_ver.py" --db "$DB" --version "$CASAVPN_MIN_CLIENT_VER" --port "$CASAVPN_VPN_PORT" --check
+fi
+
+systemctl stop x-ui
+trap 'systemctl start x-ui' EXIT
+python3 "$LIB/set_min_client_ver.py" --db "$DB" --version "$CASAVPN_MIN_CLIENT_VER" --port "$CASAVPN_VPN_PORT"

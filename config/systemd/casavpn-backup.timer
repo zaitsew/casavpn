@@ -1,0 +1,14 @@
+[Unit]
+Description=Nightly encrypted backup of the VPN host state
+Documentation=file:///usr/local/share/doc/casavpn/BACKUP.md
+
+[Timer]
+# 03:30 local time: nobody is using the VPN.
+OnCalendar=*-*-* 03:30:00
+# If the host was off at 03:30 (power cut), run once at the next boot.
+Persistent=true
+RandomizedDelaySec=0
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Pulls the VPN host's encrypted backups to this Mac once a day and raises a
+  notification if they stop arriving. Template: __HOME__, __REPO__ and
+  __SSH_TARGET__ are replaced at install.
+
+  Install (on the Mac, from the repo root):
+
+    mkdir -p ~/Library/LaunchAgents ~/Library/Logs
+    sed -e "s|__HOME__|$HOME|g" -e "s|__REPO__|$PWD|g" \
+        -e "s|__SSH_TARGET__|admin@192.0.2.10|g" \
+        config/launchd/com.casavpn.pull-backups.plist \
+      > ~/Library/LaunchAgents/com.casavpn.pull-backups.plist
+    launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.casavpn.pull-backups.plist
+
+  Run it now / check it:
+
+    launchctl kickstart -k "gui/$(id -u)/com.casavpn.pull-backups"
+    tail ~/Library/Logs/casavpn-pull-backups.log
+
+  Remove:
+
+    launchctl bootout "gui/$(id -u)/com.casavpn.pull-backups"
+    rm ~/Library/LaunchAgents/com.casavpn.pull-backups.plist
+
+  The ssh key must work non-interactively (BatchMode): an unlocked key in the
+  macOS keychain or ssh-agent, or one without a passphrase.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.casavpn.pull-backups</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__REPO__/scripts/pull-backups.sh</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>CASAVPN_SSH_TARGET</key>
+    <string>__SSH_TARGET__</string>
+  </dict>
+
+  <!-- Every day at 12:00. If the Mac was asleep, launchd runs the job once on
+       wake; RunAtLoad also runs it after login. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>12</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>Nice</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/casavpn-pull-backups.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/casavpn-pull-backups.log</string>
+</dict>
+</plist>

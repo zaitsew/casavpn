@@ -1,0 +1,20 @@
+# /etc/nginx/snippets/casavpn-admin-only.conf (CasaVPN)
+#
+# Included in every panel location of the web vhost. /sub/ does NOT include it:
+# subscriptions must stay reachable for clients everywhere.
+#
+#   127.0.0.1       the owner's own VPN client, when the optional "panel route"
+#                   is set up (config/xray/panel-route.example.json): Xray
+#                   delivers that one user's requests for the web port to
+#                   loopback, so they arrive from 127.0.0.1. Every other VPN
+#                   user leaves through the router (hairpin NAT) and shows up
+#                   as the public IP: denied.
+#   @LAN_CIDR@  the home LAN, by IP (https://<LAN_IP>:@WEB_PORT@/<base path>/).
+#                   Requests to the public hostname from home hairpin through the
+#                   router and arrive from the public IP, so they are denied
+#                   too: at home use the LAN IP, the VPN, or Tailscale.
+#   100.64.0.0/10   Tailscale: the independent way in when the VPN itself is down.
+allow 127.0.0.1;
+allow @LAN_CIDR@;
+allow 100.64.0.0/10;
+deny all;

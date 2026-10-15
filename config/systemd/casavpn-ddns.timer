@@ -1,0 +1,14 @@
+[Unit]
+Description=Reconcile the VPN DNS record every minute
+Documentation=file:///usr/local/share/doc/casavpn/DYNAMIC-IP.md
+
+[Timer]
+# First run 30 s after boot (the service is ordered after network-online.target),
+# then one minute after each run finishes. A power cut or an ISP address change
+# is therefore repaired within about two minutes.
+OnBootSec=30s
+OnUnitActiveSec=1min
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

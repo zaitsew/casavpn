@@ -1,0 +1,40 @@
+[Unit]
+Description=Reconcile the VPN DNS record with this host's public IP
+Documentation=file:///usr/local/share/doc/casavpn/DYNAMIC-IP.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The script reads /etc/casavpn/casavpn.env itself (0600 root), so there is no
+# EnvironmentFile= here and the unit cannot use DynamicUser=.
+ExecStart=/usr/local/bin/casavpn-ddns
+TimeoutStartSec=120
+
+# Hardening: outbound HTTPS, one root-owned state directory, nothing else.
+StateDirectory=casavpn-ddns
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/casavpn-ddns
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=

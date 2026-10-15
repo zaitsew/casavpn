@@ -1,0 +1,22 @@
+# /etc/ssh/sshd_config.d/00-casavpn-hardening.conf (CasaVPN)
+# Template: install.sh fills in the placeholders, validates the result with `sshd -t`
+# and refuses to install it unless an authorized key for @ADMIN_USER@ exists.
+#
+# The first value of a keyword wins in sshd, and drop-ins are read in file-name
+# order, so the 00- prefix makes these settings beat any later file.
+
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin no
+PermitEmptyPasswords no
+AllowUsers @ADMIN_USER@
+MaxAuthTries 3
+LoginGraceTime 20
+MaxStartups 5:50:20
+X11Forwarding no
+AllowAgentForwarding no
+# Local forwarding stays on: `ssh -L` is the fallback way to reach the panel.
+AllowTcpForwarding local
+ClientAliveInterval 300
+ClientAliveCountMax 2

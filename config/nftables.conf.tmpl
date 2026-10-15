@@ -1,0 +1,64 @@
+#!/usr/sbin/nft -f
+#
+# /etc/nftables.conf: host firewall for the CasaVPN host. Template: install.sh
+# fills in the placeholders from /etc/casavpn/casavpn.env and checks it with `nft -c`
+# before loading it.
+#
+# Default-deny on input. Only the VPN, the web front end, and SSH-from-the-LAN
+# are permitted.
+#
+# NOTE: this deliberately creates its own `inet casavpn` table and does NOT
+# flush the whole ruleset. Other software (Tailscale, Docker, fail2ban) manages
+# its own tables; flushing everything would tear those down until they restart.
+#
+# This host routes nothing: Xray is a proxy (its traffic is local output). If
+# you also run Docker or make this a subnet router, the forward policy below
+# must change.
+
+table inet casavpn
+delete table inet casavpn
+
+table inet casavpn {
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        iif lo accept comment "loopback"
+
+        ct state established,related accept
+        ct state invalid counter drop comment "no state, no entry"
+
+        # ICMP is required for path-MTU discovery. Dropping it causes
+        # hard-to-debug stalls on large packets, so allow it (rate-limited).
+        # meta l4proto (not ip6 nexthdr) also matches ICMPv6 behind extension headers.
+        ip   protocol icmp        limit rate 20/second accept
+        meta l4proto ipv6-icmp    limit rate 20/second accept
+
+        # --- Public services (forwarded from the router) -------------------
+        # IPv4 only: no AAAA is published, so nothing legitimate arrives on v6,
+        # and the router's v6 filtering is unverified.
+        meta nfproto ipv4 tcp dport @VPN_PORT@ accept comment "VLESS Reality: the VPN"
+        meta nfproto ipv4 tcp dport @WEB_PORT@ accept comment "HTTPS subscriptions (the panel is LAN/VPN/Tailscale only, enforced in nginx)"
+
+        # --- Administration: LAN only -------------------------------------
+        ip saddr @LAN_CIDR@ tcp dport @SSH_PORT@ accept comment "SSH from the LAN"
+#@tailscale@ iifname "tailscale0" tcp dport { @SSH_PORT@, @WEB_PORT@ } accept comment "SSH + panel over Tailscale"
+#@tailscale@ udp dport 41641 accept comment "Tailscale direct (peer-to-peer) path"
+
+        # --- Local network plumbing ---------------------------------------
+        udp sport 67 udp dport 68 accept comment "DHCP client"
+        ip  saddr @LAN_CIDR@ udp dport 5353 accept comment "mDNS (hostname.local)"
+        ip  daddr 224.0.0.251    udp dport 5353 accept comment "mDNS multicast"
+
+        # Everything else is dropped by policy. Log a sample for forensics.
+        limit rate 5/minute burst 5 packets log prefix "nft-input-drop: " level info
+        counter comment "POLICY-DROP-TOTAL"
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy drop;
+    }
+
+    chain output {
+        type filter hook output priority filter; policy accept;
+    }
+}

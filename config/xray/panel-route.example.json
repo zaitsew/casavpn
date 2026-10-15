@@ -1,0 +1,21 @@
+{
+  "_comment": "OPTIONAL. Merge into the 3x-ui Xray template (panel -> Xray Settings -> Configuration). The outbound sends ONE VPN user's requests for the web port to nginx on loopback, so that user (and nobody else on the VPN) can reach the panel from anywhere. finalRules is required because Xray's freedom outbound blocks private and loopback targets by default for VLESS-inbound traffic. The rule must sit BEFORE the geoip:private block. Replace vpn.example.com, 8443 and alice with your hostname, CASAVPN_WEB_PORT and the client's email as shown in the panel.",
+  "outbound": {
+    "tag": "panel",
+    "protocol": "freedom",
+    "settings": {
+      "redirect": "127.0.0.1:8443",
+      "finalRules": [
+        { "action": "allow", "network": "tcp", "ip": ["127.0.0.1/32"], "port": "8443" },
+        { "action": "block" }
+      ]
+    }
+  },
+  "rule": {
+    "type": "field",
+    "user": ["alice"],
+    "domain": ["full:vpn.example.com"],
+    "port": "8443",
+    "outboundTag": "panel"
+  }
+}

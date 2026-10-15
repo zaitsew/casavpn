@@ -1,0 +1,17 @@
+# Used by install.sh only when the 3x-ui release tarball ships no unit file of
+# its own. When the tarball has one (x-ui.service.debian), that one wins: it is
+# maintained upstream and carries the sandboxing for the matching release.
+[Unit]
+Description=3x-ui panel and Xray
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/usr/local/x-ui/
+ExecStart=/usr/local/x-ui/x-ui
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

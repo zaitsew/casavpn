@@ -1,0 +1,17 @@
+# /etc/fail2ban/jail.d/casavpn.conf (CasaVPN)
+# Template: install.sh fills in the placeholders.
+#
+# SSH is only reachable from the LAN (the firewall sees to that), so this jail
+# is the second line: it catches a compromised device on the home network
+# guessing passwords, and it covers the day someone opens the SSH port.
+
+[DEFAULT]
+ignoreip = 127.0.0.1/8 ::1 @LAN_CIDR@
+
+[sshd]
+enabled  = true
+port     = @SSH_PORT@
+backend  = systemd
+maxretry = 4
+findtime = 10m
+bantime  = 1h
