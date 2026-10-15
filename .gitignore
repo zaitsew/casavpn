@@ -1,0 +1,28 @@
+# Secrets and per-installation state: never commit.
+casavpn.env
+*.env
+!*.env.example
+!config/xui-release.env
+*.local
+*.local.*
+CLIENT-LINKS*
+secrets/
+*.key
+*.pem
+privkey*
+fullchain*
+*.db
+*.db-wal
+*.db-shm
+age-identity*
+*.age
+backups/
+.casavpn-*
+
+# Tooling
+node_modules/
+.wrangler/
+.dev.vars
+.DS_Store
+__pycache__/
+*.pyc

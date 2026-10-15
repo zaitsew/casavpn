@@ -1,0 +1,64 @@
+# Exceptions to tools/pii-scan.py. Every line here is a promise that the value
+# is a placeholder or public knowledge, never a real person's data. Keep it
+# short; prefer changing the text you wrote over adding a line here.
+# Syntax: see the header of tools/pii-scan.py.
+
+# --- IPv4 -------------------------------------------------------------------
+# RFC 5737 documentation ranges: the only addresses examples may use.
+ipv4-cidr 192.0.2.0/24
+ipv4-cidr 198.51.100.0/24
+ipv4-cidr 203.0.113.0/24
+# Loopback and "any".
+ipv4-cidr 127.0.0.0/8
+ipv4 0.0.0.0
+# Well-known public resolvers (they appear in DNS advice, never as a user's data).
+ipv4 1.1.1.1
+ipv4 1.0.0.1
+ipv4 8.8.8.8
+ipv4 8.8.4.4
+ipv4 9.9.9.9
+# Private and special-purpose RANGES, as CIDR text. These are network
+# definitions used by firewall rules and CGNAT detection. A host address
+# inside them (a real LAN IP) is still flagged.
+ipv4-text 0.0.0.0/8
+ipv4-text 10.0.0.0/8
+ipv4-text 100.64.0.0/10
+ipv4-text 127.0.0.0/8
+ipv4-text 169.254.0.0/16
+ipv4-text 172.16.0.0/12
+ipv4-text 192.168.0.0/16
+ipv4-text 192.0.0.0/24
+ipv4-text 198.18.0.0/15
+ipv4-text 224.0.0.0/3
+ipv4-text 224.0.0.0/4
+ipv4-text 240.0.0.0/4
+# The example LAN used as the default in casavpn.env.example (a network, not a host).
+ipv4-text 192.168.0.0/24
+# mDNS multicast group (a protocol constant).
+ipv4 224.0.0.251
+
+# tests/test-ddns.sh feeds dozens of boundary addresses (RFC1918, CGNAT and
+# their neighbours) to the public/non-public classifier. Those are the point of
+# the test, so the ipv4 rule is off for that one file; every other rule is on.
+skip-rule ipv4 tests/test-ddns.sh
+# The scanner's own test builds PII-shaped fixtures at run time.
+skip-rule ipv4 tests/test-pii-scan.sh
+
+# --- IPv6 -------------------------------------------------------------------
+ipv6-cidr 2001:db8::/32
+
+# --- e-mail -----------------------------------------------------------------
+email noreply@anthropic.com
+email-regex .+@([a-z0-9-]+\.)*example\.(com|org|net)
+email-regex .+@users\.noreply\.github\.com
+email-regex .+@raspberrypi\.local
+email-regex .+@casavpn\.local
+
+# The repository's commit identity. It contains a GitHub account name, so it is
+# removed from every line before the private denylist runs too.
+literal 78221495+zaitsew@users.noreply.github.com
+
+# --- UUID -------------------------------------------------------------------
+# Single-repeated-digit UUIDs (00000000-0000-..., 11111111-1111-...) are always
+# accepted as examples; nothing else is.
+uuid 00000000-0000-0000-0000-000000000000
