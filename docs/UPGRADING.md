@@ -1,6 +1,6 @@
 # Upgrading
 
-3x-ui (and the Xray core it bundles) is installed outside apt, so it changes only
+3x-ui and the Xray core it runs are installed outside apt, so they change only
 when you decide. Debian packages update themselves
 ([HARDENING.md](HARDENING.md#5-automatic-security-updates)).
 
@@ -22,6 +22,35 @@ If you want a release CasaVPN has not pinned yet:
 - Or edit the two lines in `config/xui-release.env` yourself after verifying the
   hashes from the release page.
 
+## The Xray core pin
+
+3x-ui bundles an Xray core, and a new 3x-ui brings a newer one. CasaVPN pins the
+core separately, in [config/xray-core.env](../config/xray-core.env): a version and
+a SHA-256 per architecture, taken from the official `XTLS/Xray-core` release (the
+`.dgst` files, which match `gh release view <tag> -R XTLS/Xray-core --json assets`).
+After 3x-ui is in place, `install.sh` and `casavpn-upgrade` download that zip,
+**refuse** it on a hash mismatch, check that the binary runs and reports the pinned
+version, and only then put it over `/usr/local/x-ui/bin/xray-linux-<arch>`.
+
+- The swap is atomic (a `.new` file, then `mv -f`): a plain `cp` fails with "Text
+  file busy" on a running binary.
+- The core 3x-ui shipped is kept beside it as `xray-linux-<arch>.bundled`.
+- The pin is re-applied after every panel upgrade, because the new tree arrives
+  with its own core. When the panel is already at the pinned version,
+  `casavpn-upgrade` still brings the core to the pin (x-ui restarts once, the tree
+  is not swapped).
+- `--offline-xray <zip>` uses a zip you downloaded yourself (still checked against
+  the pin). There is no "trust the published hash" flag for the core: the point of
+  the pin is that this exact core was tested.
+- **Opt out** with `CASAVPN_XRAY_CORE=bundled` in `/etc/casavpn/casavpn.env`. The
+  next `casavpn-upgrade` puts the bundled core back (from `.bundled`) and later
+  upgrades keep whatever core the panel ships.
+
+**Why it exists.** Xray 26.10.10, the core bundled with 3x-ui 3.10.2, refuses
+Shadowrocket (iOS) at the Reality handshake while Xray-based clients keep working;
+26.7.28 with the same 3x-ui does not. The cause inside 26.10.10 is not known, so the
+pin stays until a newer core has passed the test below.
+
 ## Upgrade
 
 ```bash
@@ -31,9 +60,9 @@ sudo casavpn-upgrade
 ```
 
 In order, it: takes an encrypted backup (needs `AGE_RECIPIENT`), downloads and
-verifies the tarball, stops x-ui, snapshots the database with `sqlite3 .backup`,
+verifies the tarball and the pinned Xray core zip, stops x-ui, snapshots the database with `sqlite3 .backup`,
 moves the installed tree to `/usr/local/x-ui.bak-<old version>`, installs the new
-tree, starts x-ui and waits for the panel, **re-asserts `minClientVer` and the
+tree and puts the pinned core over its bundled one, starts x-ui and waits for the panel, **re-asserts `minClientVer` and the
 loopback-only bindings** (an upgrade can rewrite them), and runs the local
 healthcheck. If x-ui does not come up it rolls back by itself.
 
@@ -51,6 +80,30 @@ locks out every app whose bundled core is older. CasaVPN sets
 only real test is to connect once with the **oldest** client you support before you
 close the terminal. See [RUNBOOK.md](RUNBOOK.md#playbook-3-every-client-stopped-working-after-an-upgrade).
 
+## Changing the Xray core
+
+**The rule: after any core change, test a real non-Xray client on mobile data, not
+only an old Xray client.** That covers a new 3x-ui release (it brings a new core),
+a move of the pin, `CASAVPN_XRAY_CORE=bundled`, and a core switched in the panel.
+Connect with Shadowrocket (iOS) over mobile data, not Wi-Fi (Wi-Fi can reach the
+server through NAT loopback and hide a broken public path), and load a page. An old
+Xray-based client passing proves nothing about it: on 2026-10-16 an old 26.2.6 client
+worked against 26.10.10 while Shadowrocket was refused.
+
+The failure looks like this in `journalctl -u x-ui` (or the Xray error log) and
+nowhere else; the server's own checks and the healthcheck stay green:
+
+```
+REALITY: processed invalid connection from <ip>: authentication failed or validation criteria not met
+```
+
+If you see it after an upgrade, follow
+[RUNBOOK.md, Playbook 3b](RUNBOOK.md#playbook-3b-shadowrocket-fails-after-an-upgrade-xray-clients-work).
+To go back to the pinned core by hand: `sudo casavpn-upgrade` (it re-applies the
+pin even when the panel version matches), or swap the files yourself:
+`sudo mv -f /usr/local/x-ui/bin/xray-linux-<arch>.bundled /usr/local/x-ui/bin/xray-linux-<arch>`
+then `sudo systemctl restart x-ui`.
+
 ## Roll back
 
 ```bash
@@ -58,7 +111,8 @@ sudo casavpn-rollback            # previous tree + the database snapshot taken j
 sudo casavpn-rollback --keep-db  # previous tree, current database (only if the old version can read it)
 ```
 
-The default restores the database snapshot, because a newer panel may have
+The previous tree comes back with the core it had (and its `.bundled` copy). The
+default restores the database snapshot, because a newer panel may have
 migrated it in a way the older one cannot read. The cost: a client you added after
 the upgrade is gone. The tree being replaced is kept as
 `/usr/local/x-ui.failed-<stamp>`.

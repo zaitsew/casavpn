@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The Xray core is pinned separately from 3x-ui (`config/xray-core.env`: version
+  v26.7.28 and a SHA-256 per architecture). After 3x-ui is in place, `install.sh` and
+  `casavpn-upgrade` download the official `XTLS/Xray-core` zip, refuse a hash mismatch,
+  check that the binary runs and reports the pinned version, and install it atomically
+  over `bin/xray-linux-<arch>`; the bundled core is kept as `xray-linux-<arch>.bundled`.
+  Why: Xray 26.10.10, bundled with 3x-ui 3.10.2, rejects Shadowrocket at the Reality
+  handshake while Xray-based clients keep working.
+- `casavpn-upgrade` re-applies the core pin after a panel upgrade, and also when the
+  panel is already at the pinned version but the core differs (x-ui restarts once, the
+  tree is not swapped). `casavpn-rollback` restores the old tree with the core it had.
+- `CASAVPN_XRAY_CORE=bundled` opts out; `--offline-xray <zip>` installs a zip you
+  downloaded yourself (still hash-checked).
+- Docs: "The Xray core pin" and "Changing the Xray core" in `docs/UPGRADING.md`, the
+  rule that every core change is tested with a non-Xray client on mobile data, and
+  RUNBOOK Playbook 3b with the log line and a temporary info-logging recipe.
+
 ## 0.1.0 (first release)
 
 The first public version, generalised from a private home deployment.
