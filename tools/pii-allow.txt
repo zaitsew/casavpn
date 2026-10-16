@@ -70,3 +70,8 @@ literal from zaitsew/
 # Single-repeated-digit UUIDs (00000000-0000-..., 11111111-1111-...) are always
 # accepted as examples; nothing else is.
 uuid 00000000-0000-0000-0000-000000000000
+
+# Published by the GitHub merge button on 2026-10-16 (pull request #1). The
+# maintainer acknowledged its author name by merging this line; public history
+# is never rewritten.
+ack-identity e0acebbc340c
