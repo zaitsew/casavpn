@@ -58,7 +58,20 @@ email-regex .+@casavpn\.local
 # removed from every line before the private denylist runs too.
 literal 78221495+zaitsew@users.noreply.github.com
 
+# Merges made with GitHub's merge button: GitHub's committer address, and the
+# "Merge pull request #N from <owner>/<branch>" message, which names the account
+# that owns the repository (public: it is in the repository URL). Merge locally
+# instead (CONTRIBUTING.md, "Merging"); these keep an occasional button merge from
+# failing the scan on GitHub's own text.
+email noreply@github.com
+literal from zaitsew/
+
 # --- UUID -------------------------------------------------------------------
 # Single-repeated-digit UUIDs (00000000-0000-..., 11111111-1111-...) are always
 # accepted as examples; nothing else is.
 uuid 00000000-0000-0000-0000-000000000000
+
+# Published by the GitHub merge button on 2026-10-16 (pull request #1). The
+# maintainer acknowledged its author name by merging this line; public history
+# is never rewritten.
+ack-identity e0acebbc340c

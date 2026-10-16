@@ -247,6 +247,24 @@ cp "$ROOT/tools/pii-allow.txt" "$REPO/tools/pii-allow.txt"
 git -C "$REPO" config user.email "alice@example.com"
 git -C "$REPO" commit -q --amend --reset-author --no-edit --allow-empty
 
+# ack-identity exempts one commit's author/committer, never its message
+git -C "$REPO" -c user.name="$CANARY" commit -q --amend --reset-author --no-edit --allow-empty
+scan
+assert "a denylisted author name is flagged" out_has "PII\\[denylist\\]"
+ACKED="$(git -C "$REPO" rev-parse HEAD)"
+printf 'ack-identity %s\n' "${ACKED:0:12}" >>"$REPO/tools/pii-allow.txt"
+scan
+assert "ack-identity exempts that commit's identity" rc_is 0
+git -C "$REPO" -c user.name="$CANARY" commit -q --amend --no-edit --allow-empty -m "about $CANARY"
+printf 'ack-identity %s\n' "$(git -C "$REPO" rev-parse --short=12 HEAD)" >>"$REPO/tools/pii-allow.txt"
+scan
+assert "ack-identity still scans the message" out_has "PII\\[denylist\\]"
+printf 'ack-identity e0ac\n' >>"$REPO/tools/pii-allow.txt"
+scan
+assert "ack-identity refuses a short prefix" out_has "ack-identity needs a commit hash"
+cp "$ROOT/tools/pii-allow.txt" "$REPO/tools/pii-allow.txt"
+git -C "$REPO" commit -q --amend --reset-author --no-edit --allow-empty -m "initial"
+
 # --- 7. a missing denylist warns loudly but does not fail ----------------------------------------------
 scan_nodeny() { OUT=$(cd "$REPO" && env CASAVPN_PII_DENYLIST="$T/does-not-exist" HOME="$T/nohome" python3 tools/pii-scan.py 2>&1) && RC=0 || RC=$?; }
 scan_nodeny

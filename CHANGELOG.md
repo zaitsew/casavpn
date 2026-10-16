@@ -4,6 +4,10 @@
 
 ### Changed
 
+- `tools/pii-scan.py` gains `ack-identity <commit>`: one reviewed, already published
+  commit's author and committer are exempt, its message is still scanned. The
+  allow-list accepts GitHub's merge-button text (`noreply@github.com`, "from
+  <owner>/"). CONTRIBUTING documents merging locally instead of with the button.
 - The Xray core is pinned separately from 3x-ui (`config/xray-core.env`: version
   v26.7.28 and a SHA-256 per architecture). After 3x-ui is in place, `install.sh` and
   `casavpn-upgrade` download the official `XTLS/Xray-core` zip, refuse a hash mismatch,

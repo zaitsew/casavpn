@@ -33,6 +33,25 @@ without it that step is skipped loudly). Everything runs offline and without roo
 Bugs and ideas: open an issue with the output of `casavpn-healthcheck --local` (after
 removing anything personal, see below).
 
+### Merging (maintainers)
+
+Merge on your machine, not with GitHub's merge button. The button writes the merge
+commit with your GitHub profile name as the author and `GitHub <noreply@github.com>`
+as the committer, and it skips the gate: the commit is public before `./check.sh`
+has seen it. A local merge uses the repository identity and goes through the
+pre-push hook:
+
+```bash
+git switch main && git pull --ff-only
+git merge --no-ff --no-edit origin/<branch>
+git push origin main        # the pre-push hook runs ./check.sh first
+```
+
+Keep merge commits (no squash, no rebase-merge) and never force-push `main`. A
+published commit that the scanner flags and that cannot be rewritten is reviewed by
+a human and then listed with `ack-identity <commit>` in `tools/pii-allow.txt`; that
+exempts only its author and committer, not its message.
+
 ## Keeping personal data out
 
 CasaVPN was generalised from a private deployment, and every contributor runs one of

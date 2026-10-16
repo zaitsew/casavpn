@@ -44,6 +44,11 @@ Allow-list (tools/pii-allow.txt), one rule per line, '#' starts a comment:
                                   including the private denylist
   skip-rule   <rule> <path-glob>  do not apply <rule> to matching paths
   skip-path   <path-glob>         do not scan matching paths at all
+  ack-identity <commit>           the author/committer name and e-mail of this
+                                  one commit (full hash or a prefix of at least
+                                  10) are not scanned; its message still is.
+                                  For a published commit that cannot be
+                                  rewritten, after a human has reviewed it.
 
 Exit status: 0 clean, 1 findings, 2 usage or setup error.
 """
@@ -87,6 +92,7 @@ class Allow:
         self.literals = []
         self.skip_rules = []   # (rule, glob)
         self.skip_paths = []
+        self.ack_identities = []
 
     @classmethod
     def load(cls, path):
@@ -123,6 +129,10 @@ class Allow:
                         a.skip_rules.append((args[0], args[1]))
                     elif kind == "skip-path":
                         a.skip_paths.append(args[0])
+                    elif kind == "ack-identity":
+                        if not re.fullmatch(r"[0-9a-f]{10,40}", args[0]):
+                            raise ValueError("ack-identity needs a commit hash of 10 to 40 lowercase hex digits")
+                        a.ack_identities.append(args[0])
                     else:
                         raise ValueError("unknown rule kind %r" % kind)
                 except (IndexError, ValueError) as exc:
@@ -135,6 +145,9 @@ class Allow:
 
     def path_skipped(self, path):
         return any(fnmatch.fnmatch(path, g) for g in self.skip_paths)
+
+    def identity_acked(self, sha):
+        return any(sha.startswith(a) for a in self.ack_identities)
 
     def strip_literals(self, text):
         for lit in self.literals:
@@ -374,8 +387,12 @@ def main():
                 if len(parts) < 6:
                     continue
                 sha = parts[0][:10]
+                # lines 1-4 are author name/e-mail and committer name/e-mail
+                acked = 4 if allow.identity_acked(parts[0]) else 0
                 blob = "\n".join(parts[1:6])
                 for n, line in enumerate(blob.splitlines(), 1):
+                    if n <= acked:
+                        continue
                     for rule, tok in scan_text(line, "git-log", allow):
                         report.add(rule, "commit %s (message/identity)" % sha, tok)
                     if patterns:
