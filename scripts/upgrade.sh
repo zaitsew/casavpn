@@ -111,12 +111,23 @@ wait_panel() { # wait up to 30 s for the loopback panel port
   return 1
 }
 
-restart_xui() { # x-ui is running (or not): restart it and wait for the panel
-  systemctl restart x-ui || true
-  wait_panel || warn "the panel did not answer on 127.0.0.1:$CASAVPN_PANEL_PORT after the restart: check 'journalctl -u x-ui -n 50'"
+restart_xui() { # restart x-ui and wait for the panel; non-zero if it does not come back
+  systemctl restart x-ui || return 1
+  wait_panel || return 1
 }
 
 core_bin() { printf '%s/bin/xray-linux-%s' "$XUI_DIR" "$(xui_arch)"; }
+
+# undo_core <binary> <saved previous binary>: x-ui did not come back on the new
+# core; put the previous one back, restart, and fail loudly.
+undo_core() {
+  if install -m 0755 "$2" "$1.new" && mv -f "$1.new" "$1"; then
+    if restart_xui; then die "x-ui did not come back on the new Xray core: the previous core is restored and x-ui is up again. Nothing else was changed; read 'journalctl -u x-ui -n 50'."; fi
+    die "x-ui did not come back on the new Xray core, and not on the restored previous core either: read 'journalctl -u x-ui -n 50' (sudo casavpn-rollback may help after a panel upgrade)."
+  fi
+  rm -f "$1.new"
+  die "x-ui did not come back on the new Xray core and the previous core could not be restored: copy $1.bundled over $1 by hand and restart x-ui."
+}
 
 # core_only: the panel is already at the pinned version; bring the core to the
 # pin (or back to the bundled one) without swapping the tree.
@@ -128,8 +139,9 @@ core_only() {
     if [ -e "$bin.bundled" ] && ! cmp -s "$bin" "$bin.bundled"; then
       step "Xray core: back to the bundled one (CASAVPN_XRAY_CORE=bundled)"
       [ "$DRY_RUN" = 0 ] || { log "  would restore $bin.bundled over $bin and restart x-ui"; return 0; }
+      cp -p "$bin" "$TMP/prev-core"
       restore_bundled_core "$XUI_DIR" || die "could not restore $bin.bundled"
-      restart_xui
+      restart_xui || undo_core "$bin" "$TMP/prev-core"
       ok "Xray core is now $(xray_version "$bin")"
       core_test_reminder
     else
@@ -154,8 +166,9 @@ core_only() {
   fi
   mkdir -p "$TMP/core"
   fetch_xray_core "$CORE_PIN" "$TMP/core" "$OFFLINE_XRAY"
+  cp -p "$bin" "$TMP/prev-core"
   install_xray_core "$XUI_DIR" "$TMP/core/xray"
-  restart_xui
+  restart_xui || undo_core "$bin" "$TMP/prev-core"
   ok "Xray core is now $(xray_version "$bin") (the bundled one is kept as $bin.bundled)"
   core_test_reminder
 }

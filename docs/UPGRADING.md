@@ -99,10 +99,15 @@ REALITY: processed invalid connection from <ip>: authentication failed or valida
 
 If you see it after an upgrade, follow
 [RUNBOOK.md, Playbook 3b](RUNBOOK.md#playbook-3b-shadowrocket-fails-after-an-upgrade-xray-clients-work).
-To go back to the pinned core by hand: `sudo casavpn-upgrade` (it re-applies the
-pin even when the panel version matches), or swap the files yourself:
-`sudo mv -f /usr/local/x-ui/bin/xray-linux-<arch>.bundled /usr/local/x-ui/bin/xray-linux-<arch>`
-then `sudo systemctl restart x-ui`.
+To go to the **pinned** core: `git pull`, then `sudo casavpn-upgrade` (it re-applies
+the pin even when the panel version matches). To go back to the **bundled** core
+(the one that breaks Shadowrocket on 3x-ui 3.10.2, so only to compare): set
+`CASAVPN_XRAY_CORE=bundled` and run `sudo casavpn-upgrade`, or copy it by hand, which
+keeps the backup: `sudo cp -p /usr/local/x-ui/bin/xray-linux-<arch>.bundled
+/usr/local/x-ui/bin/xray-linux-<arch>.new && sudo mv -f
+/usr/local/x-ui/bin/xray-linux-<arch>.new /usr/local/x-ui/bin/xray-linux-<arch>`, then
+`sudo systemctl restart x-ui`. If x-ui does not come back after a core-only change,
+`casavpn-upgrade` puts the previous core back by itself and exits non-zero.
 
 ## Roll back
 

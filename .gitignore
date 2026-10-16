@@ -3,6 +3,7 @@ casavpn.env
 *.env
 !*.env.example
 !config/xui-release.env
+!config/xray-core.env
 *.local
 *.local.*
 CLIENT-LINKS*

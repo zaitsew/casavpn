@@ -255,6 +255,16 @@ printf 'CASAVPN_DOMAIN=vpn.example.com\nCASAVPN_PANEL_PORT=%s\nCASAVPN_XRAY_CORE
 run "$UP" --yes
 expect "an unknown CASAVPN_XRAY_CORE value is refused" 1 "CASAVPN_XRAY_CORE 'latest' is unknown"
 
+printf 'CASAVPN_DOMAIN=vpn.example.com\nCASAVPN_PANEL_PORT=%s\n' "$CLOSED_PORT" >"$T/test.env"
+run "$UP" --yes
+expect "a core change after which x-ui does not come back fails loudly" 1 "did not come back on the new Xray core"
+yes "  ...and the previous core is put back" test "$(core "$XUI")" = 26.10.10
+yes "  ...no .new file is left behind" bash -c "! ls '$XUI'/bin/*.new >/dev/null 2>&1"
+
+if git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+  yes "config/xray-core.env is not git-ignored (a clean checkout must have it)" bash -c "! git -C '$ROOT' check-ignore -q config/xray-core.env"
+fi
+
 echo
 echo "passed: $pass  failed: $fail"
 [ "$fail" -eq 0 ]
