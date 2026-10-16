@@ -347,6 +347,130 @@ lacks  "  ...not by a bare LAN IP URL that fails the TLS handshake" "https://<LA
 expect "  ...with a hosts entry or split DNS" 0 "<LAN_IP> vpn.example.com"
 expect "  ...and says a public-address request is refused on purpose" 0 "refused on purpose"
 
+echo "install.sh: Xray core pin (fake tarball, fake core zip, fake curl)"
+case "$(uname -m)" in aarch64|arm64) XA=arm64; XZIP=Xray-linux-arm64-v8a.zip ;; *) XA=amd64; XZIP=Xray-linux-64.zip ;; esac
+SHA() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'; else shasum -a 256 "$1" | awk '{print $1}'; fi; }
+CV() { "$1" version 2>/dev/null | head -n1; }   # what a fake core says about itself
+mkdir -p "$T/core/pkg/x-ui/bin" "$T/core/served" "$T/core/bin"
+printf '#!/bin/sh\nexit 0\n' >"$T/core/pkg/x-ui/x-ui"
+printf '#!/bin/sh\necho "Xray 26.10.10 (bundled)"\n' >"$T/core/pkg/x-ui/bin/xray-linux-$XA"
+chmod +x "$T/core/pkg/x-ui/x-ui" "$T/core/pkg/x-ui/bin/xray-linux-$XA"
+tar -czf "$T/core/served/x-ui-linux-$XA.tar.gz" -C "$T/core/pkg" x-ui
+mkzip() { # <zip> <version the fake core reports>
+  python3 -I - "$1" "$2" <<'PY2'
+import sys, zipfile
+z = zipfile.ZipFile(sys.argv[1], "w")
+z.writestr("xray", '#!/bin/sh\necho "Xray %s (pinned)"\n' % sys.argv[2])
+z.writestr("geoip.dat", "not the binary")
+z.close()
+PY2
+}
+mkzip "$T/core/served/$XZIP" 26.7.28
+mkzip "$T/core/wrongver.zip" 26.10.10
+USUM="$(SHA "$T/core/served/x-ui-linux-$XA.tar.gz")"; CSUM="$(SHA "$T/core/served/$XZIP")"; WSUM="$(SHA "$T/core/wrongver.zip")"
+mkpins() { # <core hash>
+  printf 'XUI_VERSION=v9.9.9\nXUI_SHA256_AMD64=%s\nXUI_SHA256_ARM64=%s\nXUI_REPO=example/x-ui\n' "$USUM" "$USUM" >"$T/core/xui.env"
+  printf 'XRAY_CORE_VERSION=v26.7.28\nXRAY_CORE_SHA256_AMD64=%s\nXRAY_CORE_SHA256_ARM64=%s\nXRAY_CORE_REPO=example/core\n' "$1" "$1" >"$T/core/xray.env"
+}
+# a curl that serves files from $T/core/served and logs the URL it was asked for
+cat >"$T/core/bin/curl" <<'SH'
+#!/bin/sh
+out=""; url=""
+while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac; done
+echo "$url" >>"$FAKE_CURL_LOG"
+[ -n "$out" ] && [ -r "$FAKE_SERVED/$(basename "$url")" ] || exit 22
+cp "$FAKE_SERVED/$(basename "$url")" "$out"
+SH
+chmod +x "$T/core/bin/curl"
+export FAKE_CURL_LOG="$T/core/curl.log" FAKE_SERVED="$T/core/served"
+CPORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
+python3 - "$CPORT" <<'PY2' &
+import socket, sys, time
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(5)
+time.sleep(120)
+PY2
+CLISTENER=$!
+good_env "$T/core/ok.env" "CASAVPN_PANEL_PORT=$CPORT"
+core_install() { # <xui dir> [extra args...]: a real 3x-ui step against the fake release
+  local dir="$1"; shift
+  rm -rf "$T/core/db"; mkdir -p "$T/core/db"; mkxdb "$T/core/db/x-ui.db" '/pathpath/' coreadmin
+  : >"$FAKE_CURL_LOG"
+  OUT="$(PATH="$T/core/bin:$T/bin:$PATH" CASAVPN_ETC="$T/core/etc" CASAVPN_DB="$T/core/db/x-ui.db" CASAVPN_PANEL_CREDS="$T/core/etc/creds.env" \
+    CASAVPN_XUI_DIR="$dir" CASAVPN_SYSTEMD_DIR="$T/core/systemd" CASAVPN_XUI_PIN="$T/core/xui.env" CASAVPN_XRAY_PIN="$T/core/xray.env" \
+    "$INSTALL" --env "$T/core/ok.env" --yes --skip-packages --skip-files --skip-certs --skip-nginx --skip-ssh --skip-firewall --skip-fail2ban --skip-timers --skip-updates "$@" 2>&1)"; RC=$?
+}
+mkdir -p "$T/core/systemd"
+CORE_BIN() { printf '%s/bin/xray-linux-%s' "$1" "$XA"; }
+
+mkpins "$CSUM"
+core_install "$T/core/x1" --offline-xui "$T/core/served/x-ui-linux-$XA.tar.gz" --offline-xray "$T/core/served/$XZIP"
+expect "a fresh install puts the pinned core over the bundled one" 0 "installed over the bundled one"
+yes "  ...the installed core is 26.7.28" bash -c "test \"\$('$(CORE_BIN "$T/core/x1")' version)\" = 'Xray 26.7.28 (pinned)'"
+yes "  ...the bundled core is kept as .bundled" bash -c "test \"\$('$(CORE_BIN "$T/core/x1").bundled' version)\" = 'Xray 26.10.10 (bundled)'"
+yes "  ...no .new file is left behind" bash -c "! ls '$T'/core/x1/bin/*.new >/dev/null 2>&1"
+yes "  ...the installed core is executable" test -x "$(CORE_BIN "$T/core/x1")"
+yes "  ...geo data files from the zip are not installed" test ! -e "$T/core/x1/bin/geoip.dat"
+
+core_install "$T/core/x2" --offline-xui "$T/core/served/x-ui-linux-$XA.tar.gz"
+expect "without --offline-xray the core is downloaded from the pinned repo and tag" 0 "installed over the bundled one"
+yes "  ...from github.com/example/core at v26.7.28" grep -qx "https://github.com/example/core/releases/download/v26.7.28/$XZIP" "$FAKE_CURL_LOG"
+yes "  ...over HTTPS only (no other core URL was requested)" test "$(grep -c "$XZIP" "$FAKE_CURL_LOG")" = 1
+
+mkpins "0000000000000000000000000000000000000000000000000000000000000000"
+core_install "$T/core/x3" --offline-xui "$T/core/served/x-ui-linux-$XA.tar.gz" --offline-xray "$T/core/served/$XZIP"
+expect "a core zip that does not match the pin is refused" 1 "Xray core download .* does not match the pinned value"
+yes "  ...nothing was installed (no tree was created)" test ! -e "$T/core/x3"
+core_install "$T/core/x3" --offline-xui "$T/core/served/x-ui-linux-$XA.tar.gz"
+expect "the same refusal on a download" 1 "does not match the pinned value"
+yes "  ...nothing was installed" test ! -e "$T/core/x3"
+
+printf 'XRAY_CORE_VERSION=v26.7.28\nXRAY_CORE_SHA256_AMD64=\nXRAY_CORE_SHA256_ARM64=\nXRAY_CORE_REPO=example/core\n' >"$T/core/xray.env"
+core_install "$T/core/x3" --offline-xui "$T/core/served/x-ui-linux-$XA.tar.gz" --offline-xray "$T/core/served/$XZIP"
+expect "an empty pinned hash is refused, never trusted" 1 "refusing to install an unverified core"
+yes "  ...nothing was installed" test ! -e "$T/core/x3"
+
+mkpins "$WSUM"
+core_install "$T/core/x3" --offline-xui "$T/core/served/x-ui-linux-$XA.tar.gz" --offline-xray "$T/core/wrongver.zip"
+expect "a core with the right hash that reports another version is refused" 1 "reports version '26.10.10', not 26.7.28"
+yes "  ...nothing was installed" test ! -e "$T/core/x3"
+
+mkpins "$CSUM"
+core_install "$T/core/x4" --offline-xui "$T/core/served/x-ui-linux-$XA.tar.gz"
+rm -rf "$T/core/x4"; : >"$FAKE_CURL_LOG"
+OUT="$(CASAVPN_XRAY_CORE=bundled PATH="$T/core/bin:$T/bin:$PATH" CASAVPN_ETC="$T/core/etc" CASAVPN_DB="$T/core/db/x-ui.db" CASAVPN_PANEL_CREDS="$T/core/etc/creds.env" \
+  CASAVPN_XUI_DIR="$T/core/x4" CASAVPN_SYSTEMD_DIR="$T/core/systemd" CASAVPN_XUI_PIN="$T/core/xui.env" CASAVPN_XRAY_PIN="$T/core/missing.env" \
+  "$INSTALL" --env "$T/core/ok.env" --yes --skip-packages --skip-files --skip-certs --skip-nginx --skip-ssh --skip-firewall --skip-fail2ban --skip-timers --skip-updates --offline-xui "$T/core/served/x-ui-linux-$XA.tar.gz" 2>&1)"; RC=$?
+expect "CASAVPN_XRAY_CORE=bundled keeps the core 3x-ui ships" 0 "running the Xray core bundled with 3x-ui"
+yes "  ...the core is the bundled 26.10.10" bash -c "test \"\$('$(CORE_BIN "$T/core/x4")' version)\" = 'Xray 26.10.10 (bundled)'"
+yes "  ...no .bundled copy was made" test ! -e "$(CORE_BIN "$T/core/x4").bundled"
+yes "  ...the core zip was never requested" bash -c "! grep -q Xray '$FAKE_CURL_LOG'"
+yes "  ...and a missing xray-core.env does not matter" grep -q "Xray core bundled" <<<"$OUT"
+
+good_env "$T/core/badmode.env" CASAVPN_XRAY_CORE=latest
+OUT="$("$INSTALL" --dry-run --env "$T/core/badmode.env" 2>&1)"; RC=$?
+expect "an unknown CASAVPN_XRAY_CORE value is rejected" 1 "CASAVPN_XRAY_CORE 'latest' is unknown"
+
+OUT="$(CASAVPN_XUI_DIR="$T/core/none" CASAVPN_XUI_PIN="$T/core/xui.env" CASAVPN_XRAY_PIN="$T/core/xray.env" "$INSTALL" --dry-run --env "$T/core/ok.env" 2>&1)"; RC=$?
+expect "--dry-run plans the pinned core" 0 "would download Xray core v26.7.28"
+expect "  ...and the atomic install" 0 "(a .new file, then mv -f)"
+OUT="$(CASAVPN_XRAY_CORE=bundled CASAVPN_XUI_DIR="$T/core/none" CASAVPN_XUI_PIN="$T/core/xui.env" "$INSTALL" --dry-run --env "$T/core/ok.env" 2>&1)"; RC=$?
+expect "--dry-run with the opt-out keeps the bundled core" 0 "would keep the Xray core that 3x-ui ships"
+
+# install_xray_core replaces the file (new inode) instead of writing into a running binary
+mkdir -p "$T/core/atomic/bin"
+printf '#!/bin/sh\necho old\n' >"$T/core/atomic/bin/xray-linux-$XA"; chmod +x "$T/core/atomic/bin/xray-linux-$XA"
+printf '#!/bin/sh\necho "Xray 26.7.28"\n' >"$T/core/atomic/staged"
+inode() { stat -c %i "$1" 2>/dev/null || stat -f %i "$1"; }
+before="$(inode "$T/core/atomic/bin/xray-linux-$XA")"
+OUT="$( ( . "$ROOT/scripts/lib/common.sh"; install_xray_core "$T/core/atomic" "$T/core/atomic/staged" ) 2>&1 )"; RC=$?
+expect "install_xray_core succeeds" 0
+yes "  ...by replacing the file (a new inode, not a write into the running binary)" test "$before" != "$(inode "$T/core/atomic/bin/xray-linux-$XA")"
+yes "  ...the old file is the .bundled copy" bash -c "test \"\$('$T/core/atomic/bin/xray-linux-$XA.bundled')\" = old"
+OUT="$( ( . "$ROOT/scripts/lib/common.sh"; printf '#!/bin/sh\necho second\n' >"$T/core/atomic/staged2"; install_xray_core "$T/core/atomic" "$T/core/atomic/staged2" ) 2>&1 )"; RC=$?
+yes "  ...a second install does not overwrite .bundled with the pinned core" bash -c "test \"\$('$T/core/atomic/bin/xray-linux-$XA.bundled')\" = old"
+kill "$CLISTENER" 2>/dev/null; wait "$CLISTENER" 2>/dev/null
+
 echo "common.sh: load_env and the 3x-ui tarball check"
 # shellcheck source=scripts/lib/common.sh
 . "$ROOT/scripts/lib/common.sh"

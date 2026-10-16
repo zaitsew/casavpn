@@ -90,6 +90,91 @@ sudo casavpn-minver             # sets CASAVPN_MIN_CLIENT_VER on the inbound and
 Clients reconnect by themselves. Verify with a client **older** than the server (a
 fresh download hides this bug). Add that test to every upgrade.
 
+## Playbook 3b: Shadowrocket fails after an upgrade, Xray clients work
+
+Symptom: after a 3x-ui or Xray core change, Shadowrocket (iOS) cannot connect, while
+an Xray-based client (v2rayN, an old test client) still does. Keys, shortId, SNI,
+the clock and `minClientVer` all check out, so this is **not** Playbook 3. The tell
+is one line in the log for every Shadowrocket attempt:
+
+```
+REALITY: processed invalid connection from <ip>: authentication failed or validation criteria not met
+```
+
+```bash
+sudo journalctl -u x-ui --since "10 min ago" --no-pager | grep "REALITY: processed invalid connection"
+```
+
+Known cause: Xray **26.10.10** (the core bundled with 3x-ui 3.10.2) refuses
+Shadowrocket at the Reality handshake. The root cause inside that core is not
+known. CasaVPN pins 26.7.28 for this reason ([UPGRADING.md](UPGRADING.md#the-xray-core-pin)).
+
+1. Which core is running?
+
+   ```bash
+   a=$(uname -m | sed 's/aarch64/arm64/;s/x86_64/amd64/')
+   /usr/local/x-ui/bin/xray-linux-$a version | head -n1
+   ls -l /usr/local/x-ui/bin/        # a *.bundled file means the pin was applied
+   grep CASAVPN_XRAY_CORE /etc/casavpn/casavpn.env   # "bundled" = you opted out of the pin
+   ```
+
+2. Put the core back on the pin (this also fixes a host that was installed before the
+   pin existed): `git pull`, then `sudo casavpn-upgrade`. It re-applies the pin even
+   when the panel is already at the pinned version and restarts x-ui once.
+3. Test Shadowrocket **on mobile data**. If it connects, you are done.
+4. If it still fails, find out what the server sees. This needs info-level logging,
+   which is off by default; turn it on for the length of the test only. The log paths
+   below are rewritten by 3x-ui to `/var/log/x-ui/` when it starts, so the values you
+   write are only placeholders.
+
+   ```bash
+   DB=/etc/x-ui/x-ui.db
+   sudo systemctl stop x-ui
+   sudo install -d -m 0700 /root/casavpn-log-test
+   sudo python3 - "$DB" /root/casavpn-log-test/template.orig <<'PY'
+   import json, sqlite3, sys
+   db = sqlite3.connect(sys.argv[1])
+   row = db.execute("select value from settings where key='xrayTemplateConfig'").fetchone()
+   if not row or not row[0]:
+       sys.exit("no saved template: set Xray Configs -> Basic -> Log level to info in the panel instead, and revert it there")
+   open(sys.argv[2], "w").write(row[0])          # the original, for the revert
+   tpl = json.loads(row[0])
+   tpl["log"] = {"loglevel": "info", "access": "/var/log/x-ui/access.log", "error": "/var/log/x-ui/error.log"}
+   db.execute("update settings set value=? where key='xrayTemplateConfig'", (json.dumps(tpl),))
+   db.commit()
+   PY
+   sudo systemctl start x-ui
+   ```
+
+   Reproduce with Shadowrocket, then read
+   `sudo tail -n 100 /var/log/x-ui/error.log /var/log/x-ui/access.log`. No line at all
+   means the connection never reached Xray (a network problem, not this one); a
+   REALITY "invalid connection" line means the handshake itself was refused. Keep the
+   core version and that line for the bug report, minus the client addresses.
+5. **Revert and clean up.** The logs hold client addresses and destinations: do not
+   leave them.
+
+   ```bash
+   sudo systemctl stop x-ui
+   sudo python3 - "$DB" /root/casavpn-log-test/template.orig <<'PY'
+   import sqlite3, sys
+   db = sqlite3.connect(sys.argv[1])
+   db.execute("update settings set value=? where key='xrayTemplateConfig'", (open(sys.argv[2]).read(),))
+   db.commit()
+   PY
+   sudo systemctl start x-ui
+   sudo rm -f /var/log/x-ui/access.log /var/log/x-ui/error.log
+   sudo rm -rf /root/casavpn-log-test
+   ```
+
+   Check `casavpn-healthcheck --local`: it flags a template that lost its blocking rules.
+6. Only after Shadowrocket works again on mobile data, close the incident. If a newer
+   core fixes it, move the pin in one commit (version and both hashes) and repeat step 3
+   before releasing it.
+
+The general rule is in [UPGRADING.md](UPGRADING.md#changing-the-xray-core): after any
+core change, test a real non-Xray client on mobile data.
+
 ## Playbook 4: clients connect, then immediately drop
 
 A connect, a little data and a FIN within a second or two is a **Reality handshake
@@ -181,7 +266,10 @@ monthly restore drill are yours.
 
 ### Update 3x-ui and Xray
 
-[UPGRADING.md](UPGRADING.md): `sudo casavpn-upgrade`, then test with an old client.
+[UPGRADING.md](UPGRADING.md): `sudo casavpn-upgrade`, then test with an old client
+**and** with Shadowrocket on mobile data (the Xray core is pinned; see the
+[pin](UPGRADING.md#the-xray-core-pin) and
+[Playbook 3b](#playbook-3b-shadowrocket-fails-after-an-upgrade-xray-clients-work)).
 
 ### Change the settings
 

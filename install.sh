@@ -13,6 +13,9 @@
 #   packages    apt: nginx nftables fail2ban sqlite3 jq age zstd certbot ...
 #   files       our scripts to /usr/local/bin, helpers to /usr/local/lib/casavpn
 #   3xui        download the pinned 3x-ui release, verify its SHA-256, install,
+#               then replace the Xray core it bundles with the one pinned in
+#               config/xray-core.env (SHA-256 verified; the bundled core is kept
+#               as xray-linux-<arch>.bundled; CASAVPN_XRAY_CORE=bundled opts out),
 #               set generated panel credentials and a secret base path, bind
 #               the panel and subscription server to 127.0.0.1
 #   certs       a Let's Encrypt certificate by DNS-01 through Cloudflare
@@ -38,6 +41,8 @@
 #                         the tailscale command exists)
 #   --offline-xui <file>  use a 3x-ui tarball you downloaded yourself (still
 #                         checked against the pinned SHA-256)
+#   --offline-xray <file> use an Xray core zip you downloaded yourself (still
+#                         checked against the pinned SHA-256)
 #   --trust-release-sha   if the pinned hash does not match, accept the hash
 #                         published next to the release instead
 #   --force-firewall      load the firewall even though this SSH session is not
@@ -62,6 +67,7 @@ DRY_RUN=0
 ENV_FILE="${CASAVPN_ENV:-/etc/casavpn/casavpn.env}"
 TAILSCALE=auto
 OFFLINE_XUI=""
+OFFLINE_XRAY=""
 TRUST_SHA=0
 FORCE_FW=0
 FORCE_SSH=0
@@ -70,6 +76,7 @@ SHOW=""
 SKIP=" "
 USE_TAILSCALE=0
 PIN=""
+CORE_PIN=""
 
 # shellcheck source=scripts/lib/common.sh
 . "$LIB/common.sh"
@@ -84,6 +91,7 @@ while [ $# -gt 0 ]; do
       SKIP="$SKIP${1#--skip-} "; shift ;;
     --tailscale) TAILSCALE=1; shift ;;
     --offline-xui) [ $# -ge 2 ] || usage; OFFLINE_XUI="$2"; shift 2 ;;
+    --offline-xray) [ $# -ge 2 ] || usage; OFFLINE_XRAY="$2"; shift 2 ;;
     --trust-release-sha) TRUST_SHA=1; shift ;;
     --force-firewall) FORCE_FW=1; shift ;;
     --force-ssh) FORCE_SSH=1; shift ;;
@@ -305,6 +313,11 @@ preflight() {
   PIN="$(release_pin_file "$HERE/scripts")" || PIN=""
   [ -n "$PIN" ] || PIN="$HERE/config/xui-release.env"
   [ -r "$PIN" ] || die "cannot find config/xui-release.env"
+  if [ "$CASAVPN_XRAY_CORE" = pinned ]; then
+    CORE_PIN="$(core_pin_file "$HERE/scripts")" || CORE_PIN=""
+    [ -n "$CORE_PIN" ] || CORE_PIN="$HERE/config/xray-core.env"
+    [ -r "$CORE_PIN" ] || die "cannot find config/xray-core.env (CASAVPN_XRAY_CORE=bundled skips the Xray core pin)"
+  fi
 }
 
 # ===================================================================== packages ==
@@ -333,10 +346,11 @@ step_files() {
   install_file 0755 "$HERE/scripts/healthcheck.sh" "$BIN_DIR/casavpn-healthcheck"
   install_file 0755 "$HERE/scripts/upgrade.sh" "$BIN_DIR/casavpn-upgrade"
   install_file 0755 "$HERE/scripts/rollback.sh" "$BIN_DIR/casavpn-rollback"
-  for f in common.sh set_min_client_ver.py check_xray_template.py render_links.py; do
+  for f in common.sh set_min_client_ver.py check_xray_template.py render_links.py extract_zip_member.py; do
     install_file 0755 "$LIB/$f" "$LIB_DIR/$f"
   done
   install_file 0644 "$PIN" "$LIB_DIR/xui-release.env"
+  install_file 0644 "$HERE/config/xray-core.env" "$LIB_DIR/xray-core.env"
   install_file 0755 "$HERE/scripts/gen-client-links.sh" "$LIB_DIR/gen-client-links.sh"
   for f in "$HERE"/docs/*.md; do
     [ -e "$f" ] || continue
@@ -397,7 +411,7 @@ step_3xui() {
   step "3x-ui and Xray"
   local installed_ver=""
   if [ -x "$XUI_DIR/x-ui" ] || { [ "$DRY_RUN" = 1 ] && [ -e "$XUI_DIR/x-ui" ]; }; then
-    ok "3x-ui is already installed in $XUI_DIR: left alone (use casavpn-upgrade to change versions)"
+    ok "3x-ui is already installed in $XUI_DIR: left alone (use casavpn-upgrade to change versions or to apply the Xray core pin)"
     installed_ver="yes"
   fi
 
@@ -407,9 +421,20 @@ step_3xui() {
     log "  pinned release: $version (config/xui-release.env)"
     if [ "$DRY_RUN" = 1 ]; then
       log "  would download x-ui-linux-<arch>.tar.gz from github.com/$(read_pin "$PIN" XUI_REPO), verify its SHA-256, and unpack it to $XUI_DIR"
+      if [ "$CASAVPN_XRAY_CORE" = pinned ]; then
+        log "  would download Xray core $(read_pin "$CORE_PIN" XRAY_CORE_VERSION) from github.com/$(read_pin "$CORE_PIN" XRAY_CORE_REPO), verify its SHA-256, keep the bundled core as xray-linux-<arch>.bundled,"
+        log "  and install the pinned core over $XUI_DIR/bin/xray-linux-<arch> (a .new file, then mv -f)"
+      else
+        log "  CASAVPN_XRAY_CORE=bundled: would keep the Xray core that 3x-ui ships"
+      fi
     else
       mkdir -p "$dl"
       fetch_xui "$PIN" "$dl" "$TRUST_SHA" "$OFFLINE_XUI"
+      # Verify the core before anything on the host is replaced.
+      if [ "$CASAVPN_XRAY_CORE" = pinned ]; then
+        mkdir -p "$dl/core"
+        fetch_xray_core "$CORE_PIN" "$dl/core" "$OFFLINE_XRAY"
+      fi
       tar -xzf "$dl"/x-ui-linux-*.tar.gz -C "$dl"
       [ -x "$dl/x-ui/x-ui" ] || die "the tarball has no x-ui/x-ui binary"
       rm -rf "${XUI_DIR:?}"
@@ -417,6 +442,12 @@ step_3xui() {
       chmod +x "$XUI_DIR/x-ui" "$XUI_DIR"/bin/xray-linux-* 2>/dev/null || true
       [ ! -f "$XUI_DIR/x-ui.sh" ] || install -m 0755 "$XUI_DIR/x-ui.sh" /usr/bin/x-ui
       ok "unpacked 3x-ui $version to $XUI_DIR"
+      if [ "$CASAVPN_XRAY_CORE" = pinned ]; then
+        install_xray_core "$XUI_DIR" "$dl/core/xray"
+        ok "Xray core $(xray_version "$dl/core/xray") installed over the bundled one (kept as xray-linux-*.bundled); x-ui starts below"
+      else
+        warn "CASAVPN_XRAY_CORE=bundled: running the Xray core bundled with 3x-ui ($(xray_version "$XUI_DIR/bin/xray-linux-$(xui_arch)" || true)); see docs/UPGRADING.md before trusting it with Shadowrocket"
+      fi
       install_xui_unit
     fi
   fi

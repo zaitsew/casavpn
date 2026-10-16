@@ -65,6 +65,8 @@ apply_defaults() {
   # No default on purpose: a shared default site is a fingerprint (docs/REALITY-TARGET.md).
   : "${CASAVPN_REALITY_TARGET:=}"
   : "${CASAVPN_MIN_CLIENT_VER:=1.8.0}"
+  # pinned = the Xray core in config/xray-core.env; bundled = whatever 3x-ui ships.
+  : "${CASAVPN_XRAY_CORE:=pinned}"
   : "${CASAVPN_DDNS_PROVIDER:=cloudflare}"
   : "${CASAVPN_ACME_STAGING:=0}"
   : "${CASAVPN_ACME_AGREE_TOS:=0}"
@@ -77,7 +79,7 @@ apply_defaults() {
   : "${CASAVPN_BACKUP_GROUP:=}"
   : "${CASAVPN_SSH_TARGET:=}"
   export CASAVPN_VPN_PORT CASAVPN_WEB_PORT CASAVPN_SSH_PORT CASAVPN_PANEL_PORT CASAVPN_SUB_PORT \
-    CASAVPN_LAN_CIDR CASAVPN_LAN_GATEWAY CASAVPN_FAIL2BAN_IGNOREIP CASAVPN_ADMIN_USER CASAVPN_REALITY_TARGET CASAVPN_MIN_CLIENT_VER \
+    CASAVPN_LAN_CIDR CASAVPN_LAN_GATEWAY CASAVPN_FAIL2BAN_IGNOREIP CASAVPN_ADMIN_USER CASAVPN_REALITY_TARGET CASAVPN_MIN_CLIENT_VER CASAVPN_XRAY_CORE \
     CASAVPN_DDNS_PROVIDER CASAVPN_ACME_STAGING CASAVPN_ACME_AGREE_TOS CASAVPN_BACKUP_KEEP
 }
 
@@ -121,6 +123,7 @@ validate_env() {
   elif ! valid_host "$CASAVPN_REALITY_TARGET"; then complain "CASAVPN_REALITY_TARGET is not a hostname: $CASAVPN_REALITY_TARGET"; fi
   if [ "$CASAVPN_VPN_PORT" != 443 ]; then warn "CASAVPN_VPN_PORT is $CASAVPN_VPN_PORT, not 443: Xray warns that a non-443 Reality port makes the server's IP more likely to be blocked (docs/REALITY-TARGET.md)"; fi
   [[ "$CASAVPN_MIN_CLIENT_VER" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || complain "CASAVPN_MIN_CLIENT_VER is not a version like 1.8.0"
+  case "$CASAVPN_XRAY_CORE" in pinned|bundled) ;; *) complain "CASAVPN_XRAY_CORE '$CASAVPN_XRAY_CORE' is unknown (pinned | bundled)" ;; esac
   case "$CASAVPN_DDNS_PROVIDER" in cloudflare) ;; *) complain "CASAVPN_DDNS_PROVIDER '$CASAVPN_DDNS_PROVIDER' is unknown (cloudflare)" ;; esac
   if [ -n "$AGE_RECIPIENT" ] && ! [[ "$AGE_RECIPIENT" =~ ^age1[a-z0-9]{50,}$ ]]; then complain "AGE_RECIPIENT is not an age public key (age1...)"; fi
   if [ -n "$CF_API_TOKEN" ] && [ -z "$CF_ZONE_ID" ]; then complain "CF_API_TOKEN is set but CF_ZONE_ID is not"; fi
@@ -200,6 +203,92 @@ fetch_xui() {
   fi
   rm -f "$file"
   die "sha256 of the download ($got) matches neither the pinned value nor the published one (${pub:-unavailable}). Nothing was installed."
+}
+
+# --- Xray core pin ---------------------------------------------------------------
+# The core 3x-ui bundles is replaced by the one in config/xray-core.env, handled
+# like the tarball pin: parsed, downloaded over HTTPS, refused on a SHA-256
+# mismatch. Why it exists: config/xray-core.env.
+
+# core_pin_file: config/xray-core.env, next to the repo or installed.
+core_pin_file() {
+  local here="${1:-}" c
+  if [ -n "${CASAVPN_XRAY_PIN:-}" ]; then printf '%s' "$CASAVPN_XRAY_PIN"; return 0; fi
+  for c in "$here/../../config/xray-core.env" "$here/../config/xray-core.env" "$here/config/xray-core.env" "$here/xray-core.env" /usr/local/lib/casavpn/xray-core.env; do
+    if [ -r "$c" ]; then printf '%s' "$c"; return 0; fi
+  done
+  return 1
+}
+
+# xray_version <binary>: the version it reports (26.7.28), or empty.
+xray_version() {
+  "$1" version 2>/dev/null | head -n1 | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true
+}
+
+# fetch_xray_core <pin-file> <dest-dir> [offline-zip]
+# Leaves the verified, executable core at <dest-dir>/xray. The zip's SHA-256 must
+# match the pin (there is no "trust the published hash" escape here: the point of
+# the pin is that the core is the one that was tested). The binary must also run
+# and report the pinned version, so a wrong-architecture or truncated file stops
+# here, before anything on the host is touched.
+fetch_xray_core() {
+  local pin="$1" dest="$2" offline="${3:-}" arch version repo want got zipname url zip
+  arch="$(xui_arch)" || die "unsupported CPU architecture: $(uname -m) (the Xray core pin covers amd64 and arm64)"
+  version="$(read_pin "$pin" XRAY_CORE_VERSION)"; repo="$(read_pin "$pin" XRAY_CORE_REPO)"
+  [ -n "$version" ] && [ -n "$repo" ] || die "$pin is missing XRAY_CORE_VERSION or XRAY_CORE_REPO"
+  if [ "$arch" = arm64 ]; then want="$(read_pin "$pin" XRAY_CORE_SHA256_ARM64)"; zipname=Xray-linux-arm64-v8a.zip
+  else want="$(read_pin "$pin" XRAY_CORE_SHA256_AMD64)"; zipname=Xray-linux-64.zip; fi
+  [ -n "$want" ] || die "$pin has no SHA-256 for $zipname: refusing to install an unverified core"
+  zip="$dest/$zipname"
+  if [ -n "$offline" ]; then
+    [ -r "$offline" ] || die "cannot read $offline"
+    cp "$offline" "$zip"
+  else
+    url="https://github.com/$repo/releases/download/$version/$zipname"
+    log "  downloading $url"
+    curl -fL --proto '=https' --tlsv1.2 --retry 3 --max-time 300 -o "$zip" "$url" || die "download failed: $url"
+  fi
+  got="$(sha256_of "$zip")"
+  if [ "$got" != "$want" ]; then
+    rm -f "$zip"
+    die "sha256 of the Xray core download ($got) does not match the pinned value ($want). Nothing was installed. If you are deliberately moving the pin, update config/xray-core.env; CASAVPN_XRAY_CORE=bundled skips the pin."
+  fi
+  ok "Xray core sha256 matches the pinned value ($version, $arch)"
+  python3 -I "$(dirname "${BASH_SOURCE[0]}")/extract_zip_member.py" "$zip" xray "$dest/xray" \
+    || die "could not unpack the xray binary from $zipname; nothing was installed"
+  chmod 0755 "$dest/xray"
+  got="$(xray_version "$dest/xray")"
+  [ "$got" = "${version#v}" ] || die "the downloaded core reports version '${got:-none}', not ${version#v}: it will not run here, or is not the pinned release. Nothing was installed."
+}
+
+# install_xray_core <xui-dir> <staged-binary>
+# Puts the core over <xui-dir>/bin/xray-linux-<arch> atomically (a .new file and
+# mv -f: a plain cp fails with "Text file busy" on a running binary). The core
+# 3x-ui shipped is kept once as xray-linux-<arch>.bundled.
+install_xray_core() {
+  local dir="$1" staged="$2" arch target
+  arch="$(xui_arch)" || return 1
+  target="$dir/bin/xray-linux-$arch"
+  mkdir -p "$dir/bin"
+  if [ -e "$target" ] && [ ! -e "$target.bundled" ]; then
+    if ! { cp -p "$target" "$target.bundled.new" && mv -f "$target.bundled.new" "$target.bundled"; }; then
+      rm -f "$target.bundled.new"; die "could not keep the bundled core as $target.bundled; nothing was replaced"
+    fi
+  fi
+  if ! { install -m 0755 "$staged" "$target.new" && mv -f "$target.new" "$target"; }; then
+    rm -f "$target.new"; die "could not install the Xray core to $target"
+  fi
+}
+
+# restore_bundled_core <xui-dir>: put <target>.bundled back (atomically). Returns 1 if there is none.
+restore_bundled_core() {
+  local dir="$1" arch target
+  arch="$(xui_arch)" || return 1
+  target="$dir/bin/xray-linux-$arch"
+  [ -e "$target.bundled" ] || return 1
+  if ! { cp -p "$target.bundled" "$target.new" && mv -f "$target.new" "$target"; }; then
+    rm -f "$target.new"; return 1
+  fi
 }
 
 # panel_cred <KEY>: a value from /etc/casavpn/panel-credentials.env (root only).
