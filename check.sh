@@ -18,6 +18,12 @@
 
 set -u -o pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")" || exit 1
+# A hook started from a linked worktree exports GIT_DIR (and a caller may set the
+# others). Left in place they point every `git -C <throwaway repo>` in the tests at
+# this repository: on 2026-10-16 a pre-push run wrote a test's user.email into the
+# real .git/config. Git finds this checkout from the working directory without them.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_PREFIX
 
 failed=0
 step() { printf '\n== %s\n' "$*"; }

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+- `./check.sh` run by the pre-push hook from a linked worktree no longer lets the
+  tests write into the real repository: git exports `GIT_DIR` to hooks there, which
+  pointed `test-pii-scan.sh`'s throwaway repository at the real `.git` (its fixture
+  `user.email` landed in `.git/config`). `check.sh` and the test unset the git
+  environment; `tests/test-git-env.sh` guards it.
+
 ### Changed
 
 - `tools/pii-scan.py` gains `ack-identity <commit>`: one reviewed, already published

@@ -8,6 +8,10 @@
 # used here is synthetic; the developer's real one is never read.
 
 set -u -o pipefail
+# Never let an inherited GIT_DIR (a hook in a linked worktree) redirect the
+# throwaway repository below to the real one (see check.sh).
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_PREFIX
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCAN="$ROOT/tools/pii-scan.py"
