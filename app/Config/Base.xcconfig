@@ -1,0 +1,13 @@
+// Build settings shared by every configuration. Per-machine values (the bundle id
+// and the team) come from Local.xcconfig, which is not committed:
+//   cp Config/Local.xcconfig.example Config/Local.xcconfig
+
+#include? "Local.xcconfig"
+
+PRODUCT_BUNDLE_IDENTIFIER = $(CASAVPN_BUNDLE_ID)
+DEVELOPMENT_TEAM = $(CASAVPN_TEAM_ID)
+
+// The push environment the signed app is entitled to. Release builds (TestFlight,
+// App Store) use production; the relay is told which one in POST /v1/devices.
+APS_ENVIRONMENT = development
+APS_ENVIRONMENT[config=Release] = production
