@@ -117,6 +117,16 @@ struct ClientTests {
         for key in ["id", "uuid", "password", "auth"] { #expect(sent[key] == nil) }
     }
 
+    @Test func renamingAClientSendsTheNewNameToTheOldRoute() async throws {
+        let transport = FakeTransport(.response(status: 200, body: Sample.record), .ok())
+        let current = try await panel(FakeTransport(.response(status: 200, body: Sample.record))).client(email: "alice")
+        var draft = ClientDraft(editing: current)
+        draft.email = " alice-phone "
+        try await panel(transport).saveClient(draft)
+        #expect(transport.requests[1].path == "/secret-path/panel/api/clients/update/alice")
+        #expect(transport.requests[1].jsonBody["email"] as? String == "alice-phone")
+    }
+
     @Test func readsAClientInFull() async throws {
         let detail = try await panel(FakeTransport(.response(status: 200, body: Sample.record))).client(email: "alice")
         #expect(detail.email == "alice")
@@ -174,6 +184,8 @@ struct ClientTests {
         #expect(on.requests[0].httpMethod == "POST")
         let off = FakeTransport(.ok(#"{"subEnable": false, "subURI": ""}"#))
         #expect(try await panel(off).subscriptionBase() == nil)
+        let disabled = FakeTransport(.ok(#"{"subEnable": false, "subURI": "https://vpn.example.com:2096/sub/"}"#))
+        #expect(try await panel(disabled).subscriptionBase() == nil)
     }
 
     @Test func invalidDraftsAreRefusedBeforeTheNetwork() async {

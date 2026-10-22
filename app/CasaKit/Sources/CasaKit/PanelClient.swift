@@ -298,7 +298,8 @@ public struct PanelClient: PanelAPI {
     /// `POST /panel/api/setting/defaultSettings` -> `subURI`.
     public func subscriptionBase() async throws -> String? {
         let settings = try await object(DefaultSettings.self, makeRequest(method: "POST", route: ["setting", "defaultSettings"]))
-        guard let uri = settings.subURI, !uri.isBlank else { return nil }
+        // A panel with subscriptions switched off may still hold an old URI: there is nothing to share.
+        guard settings.subEnable != false, let uri = settings.subURI, !uri.isBlank else { return nil }
         return uri
     }
 

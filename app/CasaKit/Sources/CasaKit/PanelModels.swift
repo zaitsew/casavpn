@@ -404,6 +404,9 @@ struct ClientUpdateBody: Encodable, Equatable {
     /// from the stored record, because the panel overwrites every field it receives.
     init(from record: ClientRecordPayload.Record, applying draft: ClientDraft) {
         self.init(from: record, enable: draft.enable)
+        // The route names the stored client; the body carries the name it should have afterwards.
+        let name = draft.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { email = name }
         totalGB = draft.totalBytes
         expiryTime = draft.expiry.milliseconds
         limitIp = max(0, draft.limitIp)

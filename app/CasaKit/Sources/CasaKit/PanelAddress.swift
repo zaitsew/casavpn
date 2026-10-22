@@ -20,6 +20,9 @@ public enum PanelAddress {
         }
     }
 
+    /// The pages and the API root under `/panel/` in 3x-ui's web UI.
+    private static let pages: Set<String> = ["inbounds", "clients", "settings", "xray", "nodes", "api", "api-docs", "logs", "index"]
+
     /// `https://host:port/base`, with no query, no fragment, no trailing slash and no `/panel/...` or `/login` tail.
     public static func normalize(_ text: String) throws -> String {
         var input = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -37,7 +40,8 @@ public enum PanelAddress {
         components.user = nil
         components.password = nil
         var segments = components.path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        if let index = segments.firstIndex(of: "panel") {
+        // Strip only a trailing `/panel` or `/panel/<page>`: a base path may itself contain "panel".
+        if let index = segments.indices.last(where: { segments[$0] == "panel" && ($0 == segments.count - 1 || pages.contains(segments[$0 + 1])) }) {
             segments.removeSubrange(index...)
         } else if segments.last == "login" {
             segments.removeLast()

@@ -4,6 +4,13 @@ import Testing
 
 @Suite("PanelAddress")
 struct PanelAddressTests {
+    @Test func aBasePathMayContainThePanelWord() throws {
+        #expect(try PanelAddress.normalize("https://vpn.example.com:8443/panel/secret/") == "https://vpn.example.com:8443/panel/secret")
+        #expect(try PanelAddress.normalize("https://vpn.example.com:8443/panel/secret/panel/") == "https://vpn.example.com:8443/panel/secret")
+        #expect(try PanelAddress.normalize("https://vpn.example.com:8443/panel/secret/panel/inbounds") == "https://vpn.example.com:8443/panel/secret")
+        #expect(try PanelAddress.normalize("https://vpn.example.com:8443/x/panel/settings") == "https://vpn.example.com:8443/x")
+    }
+
     @Test func keepsTheBasePathAndPort() throws {
         #expect(try PanelAddress.normalize("https://vpn.example.com:8443/secret-path/") == "https://vpn.example.com:8443/secret-path")
     }

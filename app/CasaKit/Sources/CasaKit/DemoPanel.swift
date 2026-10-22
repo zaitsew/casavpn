@@ -145,7 +145,12 @@ public actor DemoPanel: PanelAPI {
         let name = draft.email.trimmingCharacters(in: .whitespacesAndNewlines)
         if let original = draft.originalEmail {
             guard let index = clientList.firstIndex(where: { $0.detail.email == original }) else { throw PanelError.api("Client not found.") }
+            if name.caseInsensitiveCompare(original) != .orderedSame,
+               clientList.contains(where: { $0.detail.email.caseInsensitiveCompare(name) == .orderedSame }) {
+                throw PanelError.api("A client with this name already exists.")
+            }
             var detail = clientList[index].detail
+            detail.email = name
             detail.enable = draft.enable
             detail.totalBytes = draft.totalBytes
             detail.expiryTime = draft.expiry.milliseconds
