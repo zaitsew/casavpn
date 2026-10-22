@@ -1,0 +1,31 @@
+SUMMARY
+CasaVPN is a remote admin console for a VPN server that the user owns and runs (a 3x-ui panel on a home server). It is NOT a VPN client and NOT a VPN service. It never creates a tunnel, never uses NetworkExtension or NEVPNManager, and never routes or inspects any traffic. It only calls the HTTPS API of the user's own panel and of the user's own alert relay.
+
+HOW TO TRY IT WITHOUT A SERVER (DEMO MODE)
+1. Launch the app. The first screen is the sign-in screen.
+2. Tap "Try demo mode" at the bottom of that screen.
+3. The app opens with sample data: server status, VPN users, inbounds, logs and alert history. Every action works on the sample data (add, edit and delete a user, reset traffic, share link and QR code, restart the VPN core). Nothing leaves the device in demo mode.
+
+WHY THERE IS NO DEMO ACCOUNT
+There is no CasaVPN account and no CasaVPN backend. Each user signs in to a panel on their own server, so we cannot give you a login to a server of ours. Demo mode opens every screen and every feature, so no sign-in is needed to review the app.
+
+PUSH NOTIFICATIONS
+Alerts are sent by the user's own relay through Apple's push service. A reviewer has no relay, so in demo mode open Settings and tap "Send test alert". A notification then appears on the device (allow notifications when iOS asks) and the same alert appears in the alert history. Critical alerts are time-sensitive notifications.
+
+PERMISSIONS
+Notifications: for server alerts. Camera: only to scan the pairing QR code that the user's own server shows; it is asked for when the user taps the scan button, and the app works without it.
+
+ENCRYPTION
+The app uses HTTPS (URLSession) only and no custom cryptography. ITSAppUsesNonExemptEncryption is NO (exempt).
+
+DATA
+The developer collects no data. Credentials are kept in the iPhone Keychain. The APNs device token is sent only to the user's own relay. No analytics, no ads, no tracking, no third-party SDKs. The app is open source: github.com/zaitsew/casavpn
+
+CHINA MAINLAND
+The app is not offered in China mainland. VPN-related management tools need a licence and an ICP filing there, which we do not have.
+
+METADATA NOTE (names)
+The app name and subtitle do not mention third-party projects. The description names "3x-ui" once, only to say which panels the app works with (compatibility). "Xray" is not used in the listing. No other company or product name is used.
+
+CONTACT
+See the contact details in this form. Support: https://zaitsew.github.io/casavpn/support

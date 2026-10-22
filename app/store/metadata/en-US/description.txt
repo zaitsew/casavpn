@@ -1,0 +1,24 @@
+CasaVPN is the remote control for a VPN server that you run yourself.
+
+It is not a VPN service. It does not connect you to a VPN and it does not route your traffic. It is an admin console: it talks to your own server and shows you what is happening there.
+
+Sign in to your server's panel with its username, password and two-factor code. Then, from your iPhone:
+
+- See the server at a glance: is the VPN up, CPU, memory, disk, uptime.
+- Manage inbounds and VPN users. Add, edit and delete users. Reset a user's traffic.
+- Share a user's connection link as text or as a QR code.
+- Restart the VPN core when it needs it.
+- Read the server logs.
+- Check the alert history and get push notifications when something needs you: the VPN goes down, a certificate is about to expire, a user runs out of traffic.
+
+Alerts come from your own relay, a small service that you deploy yourself. No service of ours sits between you and your server.
+
+Works with 3x-ui panels.
+
+No server yet? Open demo mode on the first screen. It fills the app with sample data so you can try every screen.
+
+Private by design. CasaVPN has no account, no analytics, no ads and no tracking. Your panel password stays in the iPhone Keychain. The app talks only to the panel and the relay that you set up. We collect nothing.
+
+CasaVPN is open source. The code, the relay and the setup guide for the server are at github.com/zaitsew/casavpn.
+
+What you need: a server you control, running a compatible panel that your iPhone can reach (at home or over a private network).

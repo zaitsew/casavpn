@@ -1,0 +1,25 @@
+# GitHub Pages (Jekyll) settings for https://zaitsew.github.io/casavpn/
+# Source: branch main, folder /docs. The manual in this folder is plain Markdown
+# without front matter; jekyll-optional-front-matter renders it anyway, and
+# jekyll-relative-links turns links such as HARDENING.md into page links.
+title: CasaVPN
+description: A home VPN on a Raspberry Pi, and the iPhone app that manages it.
+theme: jekyll-theme-minimal
+plugins:
+  - jekyll-optional-front-matter
+  - jekyll-relative-links
+  - jekyll-titles-from-headings
+optional_front_matter:
+  remove_originals: true
+relative_links:
+  enabled: true
+  collections: false
+titles_from_headings:
+  enabled: true
+  strip_title: false
+  collections: false
+defaults:
+  - scope:
+      path: ""
+    values:
+      layout: default
