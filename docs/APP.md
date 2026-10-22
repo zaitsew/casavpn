@@ -53,13 +53,15 @@ both Worker secrets, compared in constant time:
 - `APP_TOKEN`: the app. Registers devices, reads alerts, sends a test.
 - `HOST_TOKEN`: the host scripts. Posts events.
 
-A wrong or missing token gets `401` with no body. Bodies are JSON and at most 4 KB.
+A wrong or missing token gets `401` with no body. Bodies are JSON and at most 4 KB
+(`413` above that). An unknown path is `404`, a wrong method `405` with an `Allow`
+header, and an invalid body `400 {"error": "..."}`; unknown fields are refused.
 
 | Method and path | Token | Body | Answer |
 |---|---|---|---|
-| `POST /v1/devices` | app | `{"token": "<hex>", "environment": "sandbox" \| "production", "name": "<≤40 chars>"}` | `204`. At most 10 devices; the oldest is dropped. |
-| `DELETE /v1/devices/<hex>` | app | — | `204` |
-| `GET /v1/alerts?limit=50` | app | — | `200 {"alerts": [Alert], "monitor": Monitor}` newest first, `limit` 1–100 |
+| `POST /v1/devices` | app | `{"token": "<hex, 32-200 chars>", "environment": "sandbox" \| "production", "name": "<≤40 chars>"}` | `204`. At most 10 devices; the oldest is dropped. Registering a token again refreshes it. |
+| `DELETE /v1/devices/<hex>` | app | — | `204`, also for an unknown token |
+| `GET /v1/alerts?limit=50` | app | — | `200 {"alerts": [Alert], "monitor": Monitor}` newest first, `limit` 1–100 (default 50) |
 | `POST /v1/events` | host | `Event` | `202 {"id": "...", "pushed": <devices>}`, or `200 {"deduped": true}` |
 | `POST /v1/test` | app | — | `202 {"id": "...", "pushed": <devices>}` |
 
@@ -73,13 +75,20 @@ Monitor {"status": "up" | "down" | "unknown", "since": "<ISO>",
          "lastCheck": "<ISO>", "ip": "<IPv4 or null>", "target": "host:port"}
 ```
 
+`pushed` counts the devices APNs accepted the push for. Before the first cron run
+`monitor` is `{"status": "unknown", "since": null, "lastCheck": null, "ip": null, ...}`.
+
 `dedupe`: an event whose key was seen in the last 6 hours is stored nowhere and
 pushed to nobody. The host scripts use it so a condition that lasts does not
 alert every run (for example `cert.expiring:2026-12-30`, `client.traffic:alice:90`).
 
 Storage, in the existing KV namespace: `devices` (one JSON array), `alerts` (the
 newest 100), `dedupe:<key>` (with a 6-hour TTL), and the monitor's `state`.
-Writes happen only when something changes, far under the free plan's 1,000 a day.
+Alerts, devices and dedupe markers are written only when something changes. The
+monitor writes `state` on every cron run (288 a day) so `lastCheck` is current; with
+the rest that stays under the free plan's 1,000 a day. A monitor alert is recorded
+once even when its state write fails and the next run repeats the transition (the
+marker `dedupe:monitor:<kind>:<when the previous state began>`).
 
 ### Push
 
