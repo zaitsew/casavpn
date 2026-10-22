@@ -116,6 +116,30 @@ struct SettingsTests {
     }
 }
 
+@Suite("Sign-out wipe")
+struct SignOutWipeTests {
+    @Test func aFailedDeleteIsReportedWithWhatIsStillStoredThenRetried() throws {
+        let flaky = FlakySecretStore()
+        let store = SettingsStore(secrets: flaky)
+        var settings = ConnectionSettings(panelURL: "https://vpn.example.com/p", panelToken: "tok", relayURL: "https://r.example.com", relayToken: "rt")
+        settings.panelHeaders = [CustomHeader(name: "CF-Access-Client-Id", value: "id.example")]
+        try store.save(settings)
+
+        flaky.failWrites = true
+        #expect(store.deleteAllRetrying(attempts: 2) != nil)
+        let left = store.storedItems()
+        #expect(left.contains("the panel API token"))
+        #expect(left.contains("the extra request headers"))
+        #expect(left.contains("the relay token"))
+
+        // The retry (the next launch) succeeds once the Keychain answers again.
+        flaky.failWrites = false
+        #expect(store.deleteAllRetrying() == nil)
+        #expect(store.storedItems().isEmpty)
+        #expect(flaky.inner.keys.isEmpty)
+    }
+}
+
 /// A store whose writes can be made to fail.
 final class FlakySecretStore: SecretStore, @unchecked Sendable {
     let inner = InMemorySecretStore()

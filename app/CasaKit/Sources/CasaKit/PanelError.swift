@@ -25,6 +25,8 @@ public enum PanelError: Error, Equatable, LocalizedError {
     case invalidRequest(String)
     /// The sign-in form was refused: wrong user name, password or 2FA code.
     case signInFailed(String)
+    /// A sign-in that finished after the person signed out or cancelled: its result is thrown away.
+    case cancelled
 
     public var errorDescription: String? {
         switch self {
@@ -40,6 +42,7 @@ public enum PanelError: Error, Equatable, LocalizedError {
         case .decoding: "The panel answered something the app does not understand."
         case .incompleteList: "The client list is too long to load completely."
         case .invalidRequest(let why): why
+        case .cancelled: "Sign-in was cancelled."
         case .signInFailed(let message): message.isEmpty ? "The panel refused this user name or password." : message
         }
     }

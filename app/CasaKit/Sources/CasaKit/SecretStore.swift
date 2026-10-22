@@ -134,6 +134,38 @@ public struct SettingsStore: Sendable {
         for key in Key.legacy { try? secrets.write(nil, for: key) }
     }
 
+    /// `deleteAll`, tried `attempts` times. Returns nil when everything is gone, else the last error.
+    public func deleteAllRetrying(attempts: Int = 2) -> Error? {
+        var last: Error?
+        for _ in 0..<max(1, attempts) {
+            do { try deleteAll(); return nil } catch { last = error }
+        }
+        return last
+    }
+
+    /// What the Keychain still holds for a server, in words, for the message after a failed delete.
+    public func storedItems() -> [String] {
+        var settings = ConnectionSettings.empty
+        if let text = secrets.read(Key.connection),
+           let decoded = try? JSONDecoder().decode(ConnectionSettings.self, from: Data(text.utf8)) {
+            settings = decoded
+        }
+        for (key, keyPath) in [("panelURL", \ConnectionSettings.panelURL), ("panelToken", \.panelToken),
+                               ("relayURL", \.relayURL), ("relayToken", \.relayToken), ("subURL", \.subURL)]
+        where settings[keyPath: keyPath].isEmpty {
+            settings[keyPath: keyPath] = secrets.read(key) ?? ""
+        }
+        var items: [String] = []
+        if !settings.panelURL.isEmpty { items.append("the panel address") }
+        if !settings.panelToken.isEmpty { items.append("the panel API token") }
+        if !settings.panelSession.isEmpty || !settings.panelCSRF.isEmpty { items.append("the panel session") }
+        if !settings.panelHeaders.isEmpty { items.append("the extra request headers") }
+        if !settings.relayURL.isEmpty { items.append("the relay address") }
+        if !settings.relayToken.isEmpty { items.append("the relay token") }
+        if !settings.subURL.isEmpty { items.append("the subscription base URL") }
+        return items
+    }
+
     /// Old per-field items -> the blob. The blob is written first; the old items are deleted
     /// only after that succeeded, so a failure loses nothing.
     private func migrateLegacy() -> ConnectionSettings? {

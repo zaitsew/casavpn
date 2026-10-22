@@ -28,6 +28,7 @@ struct SignInView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if let note = model.signOutNote { signOutNoteSection(note) }
                 headerSection
                 accountSection
                 actionSection
@@ -37,7 +38,7 @@ struct SignInView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if isReauth {
-                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { model.cancelSignIn(); dismiss() } }
                 }
             }
             .onAppear(perform: prefill)
@@ -55,6 +56,14 @@ struct SignInView: View {
     }
 
     // MARK: Sections
+
+    /// What Sign out could not finish. It stays until the person dismisses it.
+    private func signOutNoteSection(_ note: String) -> some View {
+        Section {
+            StateNotice(symbol: "exclamationmark.triangle", text: note, tint: .orange)
+            Button("Dismiss") { model.signOutNote = nil }
+        }
+    }
 
     private var headerSection: some View {
         Section {

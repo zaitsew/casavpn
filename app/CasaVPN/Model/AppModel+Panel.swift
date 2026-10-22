@@ -166,53 +166,71 @@ extension AppModel {
     // MARK: Sign-in and sign-out
 
     /// Signs in to the panel, makes the app's own API token and saves the connection (the password is dropped).
-    /// The relay settings stay as they are.
+    /// The relay settings stay as they are. Order: the new settings are saved first; only then is the app's
+    /// earlier token deleted. If the save fails the new token is deleted and the old settings stay. A sign-in
+    /// that finishes after Sign out, Cancel or the demo is dropped and its token deleted.
     @discardableResult
     func signIn(address: String, username: String, password: String, twoFactor: String, headers: [CustomHeader]) async throws -> PanelSignIn.Result {
-        let signer = PanelSignIn(transport: URLSessionTransport(), deviceName: UIDevice.current.name)
-        let result = try await signer.signIn(
-            address: address, username: username, password: password, twoFactorCode: twoFactor, headers: headers
-        )
-        let old = settings
-        var merged = old
-        merged.panelURL = result.settings.panelURL
-        merged.panelToken = result.settings.panelToken
-        merged.panelUser = result.settings.panelUser
-        merged.panelTokenID = result.settings.panelTokenID
-        merged.panelTokenName = result.settings.panelTokenName
-        merged.panelSession = result.settings.panelSession
-        merged.panelCSRF = result.settings.panelCSRF
-        merged.panelHeaders = result.settings.panelHeaders
-        signOutNote = nil
-        showReauth = false
-        save(merged)
-        // A signed-in app replaces its earlier token on the same panel, so tokens do not pile up.
-        if result.madeToken, old.ownsPanelToken, old.panelURL == merged.panelURL, old.panelTokenID != merged.panelTokenID,
-           let client = PanelClient(settings: merged, transport: transport) {
-            try? await client.deleteApiToken(id: old.panelTokenID)
+        try await signInCoordinator.signIn(
+            address: address, username: username, password: password, twoFactorCode: twoFactor,
+            headers: headers, deviceName: UIDevice.current.name
+        ) { [unowned self] result in
+            let old = settings
+            var merged = old
+            merged.panelURL = result.settings.panelURL
+            merged.panelToken = result.settings.panelToken
+            merged.panelUser = result.settings.panelUser
+            merged.panelTokenID = result.settings.panelTokenID
+            merged.panelTokenName = result.settings.panelTokenName
+            merged.panelSession = result.settings.panelSession
+            merged.panelCSRF = result.settings.panelCSRF
+            merged.panelHeaders = result.settings.panelHeaders
+            guard save(merged) else {
+                throw PanelError.invalidRequest(
+                    "The iPhone Keychain refused to save the sign-in\(saveError.map { ": \($0)" } ?? ".") You are not signed in; try again."
+                )
+            }
+            signOutNote = nil
+            showReauth = false
+            return old
         }
-        return result
+    }
+
+    /// Stops a sign-in that is still running (the Cancel button of the sign-in sheet).
+    func cancelSignIn() {
+        signInCoordinator.cancel()
     }
 
     /// Signs out. The app deletes its own panel token when the panel answers, tells the relay to
     /// forget this device, then deletes every Keychain item it keeps for the server: the panel
     /// address, token or session, extra headers, the relay address and token, and the subscription base.
+    /// The person is signed out in memory in every case. If the Keychain refuses a delete, the sign-in
+    /// screen says what is still stored and the next launch tries again.
     func signOut() async {
         if isDemo { exitDemo(); return }
+        cancelSignIn()
         let old = settings
-        var note: String?
+        var notes: [String] = []
         if old.ownsPanelToken, let client = PanelClient(settings: old, transport: transport) {
             do {
                 try await client.deleteApiToken(id: old.panelTokenID)
             } catch {
-                note = "Signed out on this iPhone, but the panel could not delete the token \"\(old.panelTokenName)\": \(error.localizedDescription) "
-                    + "Delete it in the panel under Settings, API tokens."
+                notes.append(
+                    "The panel could not delete the token \"\(old.panelTokenName)\": \(error.localizedDescription) "
+                        + "Delete it in the panel under Settings, API tokens."
+                )
             }
         }
-        // Saving the empty set unregisters the device from the relay (best effort) and deletes the Keychain item.
-        save(.empty)
-        try? store.deleteAll()
-        signOutNote = note
+        cancelSignIn()
+        // In memory first (this also unregisters the device from the relay, best effort), then the Keychain.
+        apply(.empty)
+        if store.deleteAllRetrying(attempts: 3) != nil {
+            defaults.set(true, forKey: DefaultsKey.pendingWipe)
+            notes.append(Self.wipeNote(left: store.storedItems()))
+        } else {
+            defaults.removeObject(forKey: DefaultsKey.pendingWipe)
+        }
+        signOutNote = notes.isEmpty ? nil : "Signed out on this iPhone. " + notes.joined(separator: " ")
         signInSkipped = false
         defaults.set(false, forKey: "signInSkipped")
         selectedTab = .status
@@ -228,6 +246,7 @@ extension AppModel {
     // MARK: Demo
 
     func startDemo() {
+        cancelSignIn()
         resetDataForNewSource()
         isDemo = true
         demoPanel = DemoPanel()

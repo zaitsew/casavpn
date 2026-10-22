@@ -95,6 +95,8 @@ final class AppModel {
     /// epoch is dropped, so a slow answer from the old server never shows up under the new one.
     var epoch = 0
     var transport = URLSessionTransport()
+    /// Runs panel sign-ins so that one finished after Sign out or Cancel is dropped and its token deleted.
+    let signInCoordinator = SignInCoordinator()
     var relayFlight: Int?
     var statusFlight: Int?
     var inboundsFlight: Int?
@@ -105,13 +107,15 @@ final class AppModel {
     private var pushChain: Task<Void, Never>?
     private var pushApplied: Bool
 
-    private enum DefaultsKey {
+    enum DefaultsKey {
         static let signInSkipped = "signInSkipped"
         static let pushEnabled = "pushEnabled"
         static let registrationFingerprint = "registrationFingerprint"
         static let registeredAt = "registeredAt"
         /// The device token the relay holds for this phone; removed only after the relay confirmed a delete.
         static let registeredToken = "registeredToken"
+        /// Set when Sign out could not delete every Keychain item; the next launch tries again before loading anything.
+        static let pendingWipe = "pendingKeychainWipe"
     }
 
     /// A registration is repeated after this long even when nothing changed, in case the relay dropped the device.
@@ -120,7 +124,22 @@ final class AppModel {
     init(store: SettingsStore = SettingsStore(), defaults: UserDefaults = .standard) {
         self.store = store
         self.defaults = defaults
-        self.settings = store.load()
+        var startNote: String?
+        var loaded: ConnectionSettings
+        if defaults.bool(forKey: DefaultsKey.pendingWipe) {
+            // A Sign out left items behind: finish it before anything is read, or the old sign-in would come back.
+            if store.deleteAllRetrying() == nil {
+                defaults.removeObject(forKey: DefaultsKey.pendingWipe)
+                loaded = store.load()
+            } else {
+                startNote = Self.wipeNote(left: store.storedItems())
+                loaded = .empty
+            }
+        } else {
+            loaded = store.load()
+        }
+        self.settings = loaded
+        self.signOutNote = startNote
         self.signInSkipped = defaults.bool(forKey: DefaultsKey.signInSkipped)
         let push = defaults.bool(forKey: DefaultsKey.pushEnabled)
         self.pushEnabled = push
@@ -328,16 +347,25 @@ final class AppModel {
 
     // MARK: Settings
 
-    func save(_ new: ConnectionSettings) {
-        let old = settings
+    /// Saves to the Keychain, then applies. Returns false (and applies nothing) when the Keychain refused.
+    @discardableResult
+    func save(_ new: ConnectionSettings) -> Bool {
         let normalized = new.normalized()
         do {
             try store.save(normalized)
             saveError = nil
         } catch {
             saveError = error.localizedDescription
-            return
+            return false
         }
+        defaults.removeObject(forKey: DefaultsKey.pendingWipe)
+        apply(normalized)
+        return true
+    }
+
+    /// Makes `normalized` the connection in memory: cancels what is in flight and forgets the old server's data.
+    func apply(_ normalized: ConnectionSettings) {
+        let old = settings
         guard normalized != old else { return }
         settings = normalized
 
@@ -366,6 +394,12 @@ final class AppModel {
             await refreshAll()
             await syncRegistration()
         }
+    }
+
+    static func wipeNote(left: [String]) -> String {
+        let what = left.isEmpty ? "some sign-in details" : left.joined(separator: ", ")
+        return "Signed out, but the iPhone Keychain still holds \(what). The app tries to remove them again when it opens. "
+            + "If this stays, delete CasaVPN in the iOS Settings app and install it again."
     }
 
     func proposePairing(from text: String) -> String? {
