@@ -41,7 +41,11 @@ for a in "$@"; do
   case "$a" in -w) want_code=1 ;; -K) cfg=1 ;; http*) url="$a" ;; esac
   prev="$a"
 done
-[ "$cfg" = 1 ] && sed 's/^/stdin: /' >>"$FAKE/calls"
+if [ "$cfg" = 1 ]; then
+  conf="$(cat)"
+  printf '%s\n' "$conf" | sed 's/^/stdin: /' >>"$FAKE/calls"
+  [ -n "$url" ] || url="$(printf '%s\n' "$conf" | sed -n 's/^url = "\(.*\)"$/\1/p')"
+fi
 [ -f "$FAKE/down" ] && exit 7
 case "$url" in
   */v1/events)
@@ -108,7 +112,8 @@ new_case
 export NTFY_URL=https://ntfy.example.com/casavpn-EXAMPLE
 run casavpn_notify_ntfy disk.low warning 'Disk is 93 % full' 'free some space' 'disk.low'
 rc_is "delivers" 0
-has "posts to the topic" 'arg: https://ntfy.example.com/casavpn-EXAMPLE$' "$FAKE/calls"
+has "posts to the topic (the URL is read from the stdin config)" 'stdin: url = "https://ntfy.example.com/casavpn-EXAMPLE"$' "$FAKE/calls"
+lacks "the ntfy topic is not in argv" 'arg: .*casavpn-EXAMPLE' "$FAKE/calls"
 has "title header" '^arg: Title: Disk is 93 % full$' "$FAKE/calls"
 has "warning is priority high" '^arg: Priority: high$' "$FAKE/calls"
 run casavpn_notify_ntfy disk.low warning 'Disk is 93 % full' 'free some space' 'disk.low'

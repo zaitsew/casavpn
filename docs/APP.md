@@ -58,6 +58,10 @@ suppresses a repeated `dedupe` key for 6 hours, and the script gives ntfy the sa
 | `disk.low` | `df -P /` | `disk.low` |
 | `host.rebooted` | `/proc/sys/kernel/random/boot_id` against `/var/lib/casavpn/alerts-boot-id`. The first run records it without an alert | `host.rebooted:<boot id>` |
 
+If the relay (or ntfy) does not answer, the run skips its remaining sends, still runs
+every check, and exits 1; nothing is marked as delivered, so the next run retries.
+`casavpn-ddns` keeps an undelivered `ip.changed` for up to 24 h for the same reason.
+
 A key longer than 64 characters (a long client name) is shortened to a prefix plus
 a checksum, so two clients never share a key. A client that stays at 100 % alerts
 again every 6 hours; that is the dedupe window, not a bug.

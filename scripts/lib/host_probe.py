@@ -15,7 +15,10 @@ SQLite's read-only mode and `query_only`).
                             text such as "Dec 30 12:00:00 2026 GMT"
   newest <dir>              "<epoch> <YYYY-MM-DD>" of the newest casavpn-*.tar.*
                             in <dir>, or nothing when there is none
-  quote <text>              percent-encode <text> for a URL query value
+  pair-link                 reads key=value lines on stdin (panel, panelToken, relay,
+                            relayToken, sub) and prints the casavpn://pair link with
+                            every value percent-encoded. The values are secrets, so they
+                            come on stdin, never in argv, where `ps` shows them.
 
 Exit status: 0 ok, 1 the lookup failed (reason on stderr), 2 usage.
 """
@@ -98,14 +101,26 @@ def cmd_newest(directory):
         print(best, utc_day(best))
 
 
-def cmd_quote(text):
-    print(urllib.parse.quote(text, safe=""))
+PAIR_KEYS = ("panel", "panelToken", "relay", "relayToken", "sub")
+
+
+def cmd_pair_link():
+    values = {}
+    for line in sys.stdin.read().splitlines():
+        key, sep, val = line.partition("=")
+        if sep and key in PAIR_KEYS:
+            values[key] = val
+    missing = [k for k in PAIR_KEYS if not values.get(k)]
+    if missing:
+        raise ValueError("missing: " + ", ".join(missing))
+    print("casavpn://pair?" + "&".join(
+        "%s=%s" % (k, urllib.parse.quote(values[k], safe="")) for k in PAIR_KEYS))
 
 
 COMMANDS = {
     "clients": (cmd_clients, 1), "inbound": (cmd_inbound, 2), "setting": (cmd_setting, 2),
     "token-exists": (cmd_token_exists, 2), "certdate": (cmd_certdate, 1),
-    "newest": (cmd_newest, 1), "quote": (cmd_quote, 1),
+    "newest": (cmd_newest, 1), "pair-link": (cmd_pair_link, 0),
 }
 
 

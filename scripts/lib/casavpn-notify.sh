@@ -25,9 +25,17 @@
 #   CASAVPN_NOTIFY_STATE_DIR                 default /var/lib/casavpn
 #   CASAVPN_NOTIFY_REPEAT                    default 21600
 #
+# Time limits: every request has a 5 s connect and a 10 s total limit. When a
+# channel does not answer at all (a timeout, no route), the library marks it down
+# for the rest of the process and fails its later sends at once, so a run with many
+# events is bounded by one timeout per channel, not one per event. Nothing is
+# recorded for a failed send, so the next run tries again.
+#
 # Also here: casavpn_env_load, the allow-listed parser for casavpn.env.
 
 : "${CASAVPN_NOTIFY_REPEAT:=21600}"
+_NOTIFY_RELAY_DOWN=0
+_NOTIFY_NTFY_DOWN=0
 
 _notify_log() { printf '%s casavpn-notify: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >&2; }
 
@@ -86,6 +94,10 @@ casavpn_notify_relay() {
   local json url code
   _notify_check "$1" "$2" || return 2
   [ -n "${CASAVPN_RELAY_URL:-}" ] && [ -n "${CASAVPN_RELAY_TOKEN:-}" ] || return 3
+  if [ "$_NOTIFY_RELAY_DOWN" = 1 ] && [ "${CASAVPN_NOTIFY_DRY_RUN:-0}" != 1 ]; then
+    _notify_log "the relay did not answer earlier in this run; not sending '$1' (the next run retries)"
+    return 1
+  fi
   json="$(casavpn_notify_event_json "$@")" || { _notify_log "could not build the event JSON (is jq installed?)"; return 1; }
   if [ "${CASAVPN_NOTIFY_DRY_RUN:-0}" = 1 ]; then printf 'would send to the relay: %s\n' "$json"; return 0; fi
   # The token goes to curl in a config on stdin: argv is visible in `ps`. Refuse
@@ -98,6 +110,7 @@ casavpn_notify_relay() {
         | curl -sS -o /dev/null -w '%{http_code}' --max-time 10 --connect-timeout 5 -K - \
             -X POST -H 'Content-Type: application/json' --data-binary "$json" "$url" 2>/dev/null)"; then
     _notify_log "the relay did not answer ($url)"
+    _NOTIFY_RELAY_DOWN=1
     return 1
   fi
   case "$code" in
@@ -111,7 +124,7 @@ casavpn_notify_relay() {
 # casavpn_notify_ntfy <kind> <severity> <title> <body> [dedupe]
 # Same return codes; 3 also when NTFY_URL is empty.
 casavpn_notify_ntfy() {
-  local kind="$1" sev="$2" title="$3" body="$4" key="${5:-}" prio tag dir file safe now last
+  local kind="$1" sev="$2" title="$3" body="$4" key="${5:-}" prio tag dir file safe now last crc
   _notify_check "$kind" "$sev" || return 2
   [ -n "${NTFY_URL:-}" ] || return 3
   if [ "${CASAVPN_NOTIFY_DRY_RUN:-0}" = 1 ]; then printf 'would send to ntfy: [%s] %s: %s\n' "$sev" "$title" "$body"; return 0; fi
@@ -126,8 +139,22 @@ casavpn_notify_ntfy() {
   fi
   case "$sev" in critical) prio=urgent; tag=rotating_light ;; warning) prio=high; tag=warning ;; *) prio=default; tag=information_source ;; esac
   title="$(printf '%s' "$title" | tr -d '\r\n')"
-  if ! curl -fsS --max-time 10 --connect-timeout 5 -H "Title: $title" -H "Priority: $prio" -H "Tags: $tag" \
-       -d "$body" "$NTFY_URL" >/dev/null 2>&1; then
+  if [ "$_NOTIFY_NTFY_DOWN" = 1 ]; then
+    _notify_log "ntfy did not answer earlier in this run; not sending '$kind' (the next run retries)"
+    return 1
+  fi
+  # The topic in NTFY_URL is the only secret of the channel, so the URL goes to curl
+  # in a config on stdin, not in argv. Refuse characters that could end the value.
+  case "$NTFY_URL" in
+    *[!A-Za-z0-9._~:/?\&=%+,@-]*) _notify_log "NTFY_URL has characters a URL should not have; not sending"; return 1 ;;
+  esac
+  crc=0
+  printf 'url = "%s"\n' "$NTFY_URL" \
+    | curl -fsS --max-time 10 --connect-timeout 5 -K - -H "Title: $title" -H "Priority: $prio" -H "Tags: $tag" \
+        -d "$body" >/dev/null 2>&1 || crc=$?
+  if [ "$crc" -ne 0 ]; then
+    # 6 no host, 7 no connection, 28 timeout, 35 TLS, 52/56 empty reply or reset.
+    case "$crc" in 6|7|28|35|52|56) _NOTIFY_NTFY_DOWN=1 ;; esac
     _notify_log "could not deliver '$kind' to ntfy"
     return 1
   fi

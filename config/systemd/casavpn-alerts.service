@@ -9,7 +9,7 @@ Type=oneshot
 # The script reads /etc/casavpn/casavpn.env itself (0600 root), so there is no
 # EnvironmentFile= here and the unit cannot use DynamicUser=.
 ExecStart=/usr/local/bin/casavpn-alerts
-TimeoutStartSec=2min
+TimeoutStartSec=5min
 Nice=10
 
 # Hardening: read the panel database, the certificate and the backup directory,

@@ -47,9 +47,14 @@ printf '%s' "$TOKEN" >"$FAKE/token"
 cat >"$FAKE/bin/qrencode" <<'QR'
 #!/usr/bin/env bash
 echo "$*" >"$FAKE/qr.args"
+cat >"$FAKE/qr.stdin"
 echo "[QR CODE]"
 QR
 chmod +x "$FAKE/bin/qrencode"
+
+REAL_PY="$(command -v python3)"
+printf '#!/usr/bin/env bash\necho "python3 $*" >>"$FAKE/argv.log"\nexec "%s" "$@"\n' "$REAL_PY" >"$FAKE/bin/python3"
+chmod +x "$FAKE/bin/python3"
 
 cat >"$T/mkdb.py" <<'PY'
 import sqlite3, sys
@@ -81,7 +86,7 @@ run() {
   local envs=()
   while [ $# -gt 0 ] && [ "$1" != -- ]; do envs+=("$1"); shift; done
   shift
-  rm -f "$FAKE/xui.log" "$FAKE/qr.args"
+  rm -f "$FAKE/xui.log" "$FAKE/qr.args" "$FAKE/qr.stdin" "$FAKE/argv.log"
   OUT="$(env -i PATH="$FAKE/bin:/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin" HOME="$T" \
       CASAVPN_PAIR_ALLOW_NONROOT=1 CASAVPN_ENV_FILE="$T/casavpn.env" CASAVPN_DB="$DB" \
       CASAVPN_PANEL_CREDS="$CREDS" CASAVPN_XUI_DIR="$FAKE/xui" FAKE="$FAKE" \
@@ -109,6 +114,19 @@ err_has "warns that the code holds secrets" "contains secrets"
 err_has "the QR is drawn on stderr" "[QR CODE]"
 eq "qrencode draws the terminal QR" "$(cat "$FAKE/qr.args" | cut -d' ' -f1-2)" "-t ANSIUTF8"
 err_lacks "stderr does not repeat the link" "casavpn://pair"
+eq "the QR is made from the link on stdin" "$(cat "$FAKE/qr.stdin")" "$OUT"
+eq "qrencode gets only options, no string (the link would show in ps)" "$(cat "$FAKE/qr.args")" "-t ANSIUTF8 -m 2"
+# Every process the script starts has its argv recorded (python3 by a wrapper, qrencode and
+# x-ui by their stubs); no secret may be in any of them.
+no_secret_in_argv() { # <label> <secret>...
+  local label="$1" sec bad_one=""
+  shift
+  for sec in "$@"; do
+    if grep -qF -- "$sec" "$FAKE/argv.log" "$FAKE/qr.args" "$FAKE/xui.log" 2>/dev/null; then bad_one="$sec"; fi
+  done
+  if [ -z "$bad_one" ]; then ok "$label"; else bad "$label (found in a command line)"; fi
+}
+no_secret_in_argv "no token is in any command line (panel token, app token, link)" "$TOKEN" "apptoken_ABCDEF-012345" "casavpn://pair" "abc123secret"
 eq "x-ui is called once with the flags before the positional argument" "$(cat "$FAKE/xui.log")" "setting -getApiToken -tokenName casavpn-app -tokenScope admin"
 
 echo "--no-qr and a missing qrencode"
@@ -121,14 +139,15 @@ run -- --yes
 rc_is "without qrencode it still succeeds" 0 0
 err_has "without qrencode it says how to install it" "apt-get install qrencode"
 out_has "without qrencode the link is printed" "casavpn://pair?"
-printf '#!/usr/bin/env bash\necho "$*" >"$FAKE/qr.args"\necho "[QR CODE]"\n' >"$FAKE/bin/qrencode"; chmod +x "$FAKE/bin/qrencode"
+printf '#!/usr/bin/env bash\necho "$*" >"$FAKE/qr.args"\ncat >"$FAKE/qr.stdin"\necho "[QR CODE]"\n' >"$FAKE/bin/qrencode"; chmod +x "$FAKE/bin/qrencode"
 
 # --- encoding ----------------------------------------------------------------------
 echo "encoding"
 run "CASAVPN_RELAY_APP_TOKEN=a b&c=d%e/f+g#h?i" "CASAVPN_PANEL_TOKEN=pt&x=1 2" -- 
 rc_is "exotic characters do not break it" 0 0
+no_secret_in_argv "  ...and none of them is in a command line" "c=d%e" "pt&x"
 eq "relayToken round-trips (spaces are stripped, the rest encoded)" "$(param relayToken)" "ab&c=d%e/f+g#h?i"
-eq "panelToken round-trips" "$(param panelToken)" "pt&x=1 2"
+eq "panelToken round-trips (spaces stripped)" "$(param panelToken)" "pt&x=12"
 out_lacks "a raw ampersand from a token cannot start a new parameter" "&x=1"
 out_lacks "no raw hash in the link" "#"
 eq "an env token means x-ui is not touched" "$(xui_calls)" "0"
@@ -204,8 +223,8 @@ eq "the web port follows casavpn.env" "$(param sub)" "https://vpn.example.com:94
 sed '/WEB_PORT/d' "$T/casavpn.env" >"$T/noport.env"
 run CASAVPN_ENV_FILE="$T/noport.env" -- --yes
 eq "the web port defaults to 8443" "$(param sub)" "https://vpn.example.com:8443/sub/"
-run CASAVPN_RELAY_APP_TOKEN=hosttoken_0123456789 CASAVPN_RELAY_TOKEN=hosttoken_0123456789 -- --yes
-rc_is "the host token is refused as the app token" 1 0
+run CASAVPN_RELAY_APP_TOKEN=hosttoken_0123456789 -- --yes
+rc_is "the host token (read from casavpn.env) is refused as the app token" 1 0
 err_has "...with the reason" "HOST token"
 eq "...before touching the token" "$(xui_calls)" "0"
 run CASAVPN_RELAY_APP_TOKEN= -- --yes

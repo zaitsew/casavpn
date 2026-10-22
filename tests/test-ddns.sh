@@ -434,6 +434,27 @@ new_case; write_env "${RELAY_ENV[@]}"; touch "$FAKE_DIR/relay_503"; ddns
 assert "relay down: the run still repairs DNS and exits 0" bash -c "[ $RC -eq 0 ] && [ \"\$(jq -r '.[0].content' '$FAKE_DIR/records.json')\" = '$IP' ]"
 assert "relay down: the failure is logged" out_has "could not deliver the relay alert"
 assert "relay down: no rate-limit state, so the next run retries" test ! -f "$STATE_DIR/relay-changed-${OLD}-${IP}"
+assert "relay down: the undelivered ip.changed is kept" test "$(jq -r '[.kind,.relay,.ntfy]|join(" ")' "$STATE_DIR/pending-event")" = "ip.changed 1 0"
+rm -f "$FAKE_DIR/relay_503"; : >"$FAKE_DIR/relay.log"
+ddns
+assert "pending: the next run (DNS already in sync) resends it" test "$(relay_count)" = "1"
+assert "pending: ... as the same event" test "$(relay_json 1 | jq -r '[.kind,.dedupe]|join(" ")')" = "ip.changed ip.changed:$OLD-$IP"
+assert "pending: ... and forgets it once delivered" test ! -e "$STATE_DIR/pending-event"
+ddns
+assert "pending: nothing is sent again after that" test "$(relay_count)" = "1"
+new_case; write_env "NTFY_URL=https://ntfy.test/secret-topic" "${RELAY_ENV[@]}"; touch "$FAKE_DIR/relay_503"; ddns
+assert "pending: ntfy delivered, relay failed: only the relay is pending" test "$(jq -r '[.relay,.ntfy]|join(" ")' "$STATE_DIR/pending-event")" = "1 0"
+rm -f "$FAKE_DIR/relay_503"; n=$(ntfy_count); ddns
+assert "pending: the retry does not push to ntfy twice" test "$(ntfy_count)" = "$n"
+assert "pending: ... and the relay got it" test "$(relay_count)" -ge 1
+new_case; write_env "${RELAY_ENV[@]}"; touch "$FAKE_DIR/relay_503"; ddns; ddns; ddns
+assert "pending: a still-failing relay keeps the event" test -s "$STATE_DIR/pending-event"
+jq -c '.at = 1000' "$STATE_DIR/pending-event" >"$STATE_DIR/p.tmp" && mv "$STATE_DIR/p.tmp" "$STATE_DIR/pending-event"
+ddns
+assert "pending: an event older than 24 h is dropped" test ! -e "$STATE_DIR/pending-event"
+assert "pending: ... and logged" out_has "dropping the kept alert"
+new_case; write_env "${RELAY_ENV[@]}"; touch "$FAKE_DIR/relay_503"; ddns --dry-run
+assert "pending: --dry-run keeps nothing" test ! -e "$STATE_DIR/pending-event"
 new_case; write_env "NTFY_URL=https://ntfy.test/secret-topic" "CASAVPN_RELAY_URL=https://relay.test"; ddns
 assert "relay URL without a token: not used" test "$(relay_count)" = "0"
 

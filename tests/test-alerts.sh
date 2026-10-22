@@ -60,7 +60,12 @@ while [ $# -gt 0 ]; do
   case "$1" in -w) want_code=1; shift ;; --data-binary|-d) data="$2"; shift ;; -K) cfg=1 ;; http*) url="$1" ;; esac
   shift
 done
-[ "$cfg" = 1 ] && cat >"$FAKE/last_stdin"
+if [ "$cfg" = 1 ]; then
+  conf="$(cat)"
+  case "$conf" in *Authorization*) printf "%s\n" "$conf" >"$FAKE/last_stdin" ;; esac
+  [ -n "$url" ] || url="$(printf "%s\n" "$conf" | sed -n "s/^url = \"\(.*\)\"\$/\1/p")"
+fi
+printf "%s\n" "$*" >>"$FAKE/argv.log"
 printf "%s\t%s\n" "$url" "$data" >>"$FAKE/requests"
 [ -f "$FAKE/down" ] && exit 7
 code=202; [ -f "$FAKE/code" ] && code="$(cat "$FAKE/code")"
@@ -335,6 +340,7 @@ eq "to the relay's events endpoint" "$(cut -f1 "$FAKE/requests" | sort -u)" "htt
 eq "the reboot event carries its dedupe key" "$(sent | jq -r 'select(.kind=="host.rebooted") | .dedupe')" "host.rebooted:boot-bbbb"
 eq "the certificate event is critical under 3 days" "$(sent | jq -r 'select(.kind=="cert.expiring") | .severity')" critical
 eq "the host token is given to curl on stdin" "$(cat "$FAKE/last_stdin")" 'header = "Authorization: Bearer hosttoken123"'
+if grep -q 'hosttoken123' "$FAKE/argv.log"; then bad "the host token is in curl's argv"; else ok "the host token never appears in curl's argv"; fi
 eq "the delivered boot id is stored" "$(cat "$STATE/alerts-boot-id")" boot-bbbb
 alerts
 rc_is "run again: still exit 0" 0
@@ -349,11 +355,23 @@ eq "  ...and now the boot id is stored" "$(cat "$STATE/alerts-boot-id")" boot-bb
 new_case; echo 91 >"$FAKE/df"; touch "$FAKE/down"; alerts
 rc_is "the relay is unreachable: exit 1, not a crash" 1
 said "  ...the other checks still ran" "done: 1 event(s), 1 failure(s)"
+# Several events, a relay that does not answer: one attempt, not one timeout per event.
+new_case; echo 91 >"$FAKE/df"; echo "boot-bbbb" >"$C/boot_id"; enddate_in $((2 * DAY)) >"$FAKE/enddate"
+printf 'alice|1|%s|0|%s|0\n' "$LIMIT" "$LIMIT" | mkdb "$C/x-ui.db"; touch "$FAKE/down"; alerts
+rc_is "four events, relay down: exit 1" 1
+eq "  ...curl is asked once, the other sends are skipped" "$(wc -l <"$FAKE/requests" | tr -d ' ')" 1
+said "  ...the log says why the rest were not sent" "did not answer earlier in this run"
+said "  ...every check still ran" "xray: port 443 is listening"
+eq "  ...no event was marked delivered (boot id unchanged)" "$(cat "$STATE/alerts-boot-id")" boot-aaaa
+rm "$FAKE/down"; : >"$FAKE/requests"; alerts
+rc_is "the relay is back: the next run delivers them all" 0
+eq "  ...four requests" "$(wc -l <"$FAKE/requests" | tr -d ' ')" 4
 
 echo "ntfy"
 new_case; printf 'NTFY_URL=https://ntfy.example.com/casavpn-EXAMPLE\n' >"$C/env"; echo 91 >"$FAKE/df"; alerts
 rc_is "ntfy alone is enough" 0
 eq "  ...and was used" "$(cut -f1 "$FAKE/requests")" "https://ntfy.example.com/casavpn-EXAMPLE"
+if grep -q 'casavpn-EXAMPLE' "$FAKE/argv.log"; then bad "the ntfy topic is in curl's argv"; else ok "  ...and the topic never appears in curl's argv"; fi
 alerts
 eq "  ...a lasting condition is not pushed again 15 minutes later" "$(wc -l <"$FAKE/requests" | tr -d ' ')" 1
 new_case; : >"$C/env"; echo 91 >"$FAKE/df"; alerts
@@ -368,7 +386,7 @@ said "  ...and prints the checks" "client.traffic"
 
 echo "systemd units"
 SVC="$ROOT/config/systemd/casavpn-alerts.service"; TMR="$ROOT/config/systemd/casavpn-alerts.timer"
-for want in 'Type=oneshot' 'ExecStart=/usr/local/bin/casavpn-alerts' 'StateDirectory=casavpn' 'ProtectSystem=strict' 'NoNewPrivileges=true' 'AF_NETLINK'; do
+for want in 'Type=oneshot' 'TimeoutStartSec=5min' 'ExecStart=/usr/local/bin/casavpn-alerts' 'StateDirectory=casavpn' 'ProtectSystem=strict' 'NoNewPrivileges=true' 'AF_NETLINK'; do
   if grep -q -- "^$want\|^RestrictAddressFamilies=.*$want" "$SVC"; then ok "service has $want"; else bad "service lacks $want"; fi
 done
 if grep -q '^OnUnitActiveSec=15min$' "$TMR" && grep -q '^OnBootSec=' "$TMR" && grep -q '^WantedBy=timers.target$' "$TMR"; then ok "timer: after boot, then every 15 minutes, wanted by timers.target"; else bad "timer shape"; fi
@@ -387,7 +405,7 @@ import sqlite3, sys
 d = sqlite3.connect(sys.argv[1]); d.execute("INSERT INTO api_tokens (name, token, scope) VALUES ('casavpn-app', 'hash', 'admin')"); d.commit()
 PY
 eq "token-exists: yes" "$(python3 -I "$PROBE" token-exists "$C/x-ui.db" casavpn-app)" 1
-eq "quote encodes everything that is not unreserved" "$(python3 -I "$PROBE" quote 'a b&c=d/e?f#g%h+i~j_k.l-m')" 'a%20b%26c%3Dd%2Fe%3Ff%23g%25h%2Bi~j_k.l-m'
+eq "pair-link encodes everything that is not unreserved" "$(printf 'panel=a b&c=d/e?f#g%%h+i~j_k.l-m\npanelToken=t\nrelay=r\nrelayToken=x\nsub=s\n' | python3 -I "$PROBE" pair-link)" 'casavpn://pair?panel=a%20b%26c%3Dd%2Fe%3Ff%23g%25h%2Bi~j_k.l-m&panelToken=t&relay=r&relayToken=x&sub=s'
 cp "$C/x-ui.db" "$C/ro.db"; before="$(cksum <"$C/ro.db")"
 python3 -I "$PROBE" clients "$C/ro.db" >/dev/null
 eq "reading never changes the database file" "$(cksum <"$C/ro.db")" "$before"

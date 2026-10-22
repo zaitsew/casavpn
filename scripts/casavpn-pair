@@ -73,9 +73,6 @@ find_lib() {
   return 1
 }
 
-# enc <text>: percent-encode a query value (RFC 3986 unreserved characters stay).
-enc() { python3 -I "$PROBE" quote "$1"; }
-
 # ask_secret <prompt>: read a value from the terminal without echoing it.
 ask_secret() {
   local v=""
@@ -142,7 +139,7 @@ main() {
   . "$lib"
   PROBE="$(find_lib host_probe.py)" || die "host_probe.py not found next to casavpn-notify.sh"
   command -v python3 >/dev/null 2>&1 || die "python3 is not installed (apt install python3)"
-  casavpn_env_load "$ENV_FILE" CASAVPN_DOMAIN CASAVPN_WEB_PORT CASAVPN_RELAY_URL \
+  casavpn_env_load "$ENV_FILE" CASAVPN_DOMAIN CASAVPN_WEB_PORT CASAVPN_RELAY_URL CASAVPN_RELAY_TOKEN \
     || err "cannot read $ENV_FILE; using the environment only"
 
   # Everything that can be wrong without side effects comes first, so a failure
@@ -167,12 +164,14 @@ main() {
     die "that is the HOST token. The app needs the APP token, a different Worker secret (docs/APP.md)"
   fi
 
-  panel_token="$CASAVPN_PANEL_TOKEN"
+  panel_token="${CASAVPN_PANEL_TOKEN//[[:space:]]/}"
   if [ -z "$panel_token" ]; then panel_token="$(make_panel_token)" || exit 1; fi
 
   panel="https://$CASAVPN_DOMAIN:$CASAVPN_WEB_PORT/$base"
   sub="https://$CASAVPN_DOMAIN:$CASAVPN_WEB_PORT/sub/"
-  link="casavpn://pair?panel=$(enc "$panel")&panelToken=$(enc "$panel_token")&relay=$(enc "$relay")&relayToken=$(enc "$app_token")&sub=$(enc "$sub")"
+  # The secrets travel on stdin (printf is a shell builtin), never in argv.
+  link="$(printf 'panel=%s\npanelToken=%s\nrelay=%s\nrelayToken=%s\nsub=%s\n' "$panel" "$panel_token" "$relay" "$app_token" "$sub" \
+    | python3 -I "$PROBE" pair-link)" || die "could not build the pairing link"
 
   {
     echo
@@ -183,7 +182,8 @@ main() {
   } >&2
   if [ "$SHOW_QR" = 1 ]; then
     if command -v qrencode >/dev/null 2>&1; then
-      qrencode -t ANSIUTF8 -m 2 "$link" >&2 || err "qrencode failed; use the link below"
+      # No string argument: qrencode reads the text from stdin, so the link stays out of argv.
+      printf '%s' "$link" | qrencode -t ANSIUTF8 -m 2 >&2 || err "qrencode failed; use the link below"
     else
       err "qrencode is not installed (sudo apt-get install qrencode): paste the link into the app instead"
     fi

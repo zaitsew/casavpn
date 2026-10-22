@@ -14,7 +14,13 @@
   `backup.stale`, `disk.low` and `host.rebooted`. `--dry-run` prints the events.
   `install.sh` installs it and enables the timer when a relay or `NTFY_URL` is set.
 - `casavpn-ddns` also sends `ip.changed` and `ddns.failed` to the relay, with the
-  same rate limits as ntfy.
+  same rate limits as ntfy. An `ip.changed` that no channel accepted is kept in
+  `pending-event` and resent on the next runs for up to 24 h (DNS is already repaired
+  by then, so nothing else would announce it).
+- Secrets stay out of command lines: the relay token, the ntfy topic, and the pairing
+  link (python and `qrencode` read it on stdin). When a relay or ntfy does not answer,
+  the rest of that run's sends to it are skipped, so a run ends within about 15 s per
+  channel; `casavpn-alerts.service` allows 5 minutes.
 - `casavpn-pair` prints the `casavpn://pair` link and a terminal QR for the app. It
   makes the panel's `casavpn-app` API token with `x-ui setting -getApiToken` and asks
   before replacing an earlier one.
