@@ -115,7 +115,8 @@ public struct SettingsStore: Sendable {
     public func save(_ settings: ConnectionSettings) throws {
         let normalized = settings.normalized()
         if normalized == .empty {
-            try secrets.write(nil, for: Key.connection)
+            try deleteAll()
+            return
         } else {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
@@ -123,6 +124,51 @@ public struct SettingsStore: Sendable {
             try secrets.write(String(decoding: data, as: UTF8.self), for: Key.connection)
         }
         for key in Key.legacy { try? secrets.write(nil, for: key) }
+    }
+
+    /// Removes every Keychain item the app keeps for a server: the connection blob (panel address,
+    /// credential, token, session, extra headers, relay address and token, subscription base) and
+    /// the per-field items of the first versions. Sign out calls this.
+    public func deleteAll() throws {
+        // Try every item, then report the first failure: a legacy item left behind would be
+        // migrated back on the next launch.
+        var first: Error?
+        for key in [Key.connection] + Key.legacy {
+            do { try secrets.write(nil, for: key) } catch { if first == nil { first = error } }
+        }
+        if let first { throw first }
+    }
+
+    /// `deleteAll`, tried `attempts` times. Returns nil when everything is gone, else the last error.
+    public func deleteAllRetrying(attempts: Int = 2) -> Error? {
+        var last: Error?
+        for _ in 0..<max(1, attempts) {
+            do { try deleteAll(); return nil } catch { last = error }
+        }
+        return last
+    }
+
+    /// What the Keychain still holds for a server, in words, for the message after a failed delete.
+    public func storedItems() -> [String] {
+        var settings = ConnectionSettings.empty
+        if let text = secrets.read(Key.connection),
+           let decoded = try? JSONDecoder().decode(ConnectionSettings.self, from: Data(text.utf8)) {
+            settings = decoded
+        }
+        for (key, keyPath) in [("panelURL", \ConnectionSettings.panelURL), ("panelToken", \.panelToken),
+                               ("relayURL", \.relayURL), ("relayToken", \.relayToken), ("subURL", \.subURL)]
+        where settings[keyPath: keyPath].isEmpty {
+            settings[keyPath: keyPath] = secrets.read(key) ?? ""
+        }
+        var items: [String] = []
+        if !settings.panelURL.isEmpty { items.append("the panel address") }
+        if !settings.panelToken.isEmpty { items.append("the panel API token") }
+        if !settings.panelSession.isEmpty || !settings.panelCSRF.isEmpty { items.append("the panel session") }
+        if !settings.panelHeaders.isEmpty { items.append("the extra request headers") }
+        if !settings.relayURL.isEmpty { items.append("the relay address") }
+        if !settings.relayToken.isEmpty { items.append("the relay token") }
+        if !settings.subURL.isEmpty { items.append("the subscription base URL") }
+        return items
     }
 
     /// Old per-field items -> the blob. The blob is written first; the old items are deleted

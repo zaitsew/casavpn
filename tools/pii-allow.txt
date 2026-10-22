@@ -70,6 +70,23 @@ literal from zaitsew/
 # Single-repeated-digit UUIDs (00000000-0000-..., 11111111-1111-...) are always
 # accepted as examples; nothing else is.
 uuid 00000000-0000-0000-0000-000000000000
+# Fixed client ids in the unit-test fixtures of app/CasaKit (all-zero, version-4 shaped
+# so the decoder accepts them). They belong to no server.
+uuid 00000000-0000-4000-8000-000000000001
+uuid 00000000-0000-4000-8000-000000000002
+
+# --- Demo keys --------------------------------------------------------------
+# The demo server in the app and the CasaKit tests use made-up x25519 key strings.
+# They are not used by any server.
+# demo-only Reality public key, not used by any server
+literal Dm0Pu3bQ1xYb7mYk2eV9tCq4sHn8LrXa5oJfWzUiG6A
+# demo-only Reality private key, not used by any server
+literal yK3tNn8vBq1ZcR6eHs0LxWp4UoJm2AaD9gFiTb7QeXw
+
+# --- The project's own URL --------------------------------------------------
+# The app links to the public docs on GitHub (docs/APP.md, docs/QUICKSTART.md).
+# The owner handle is part of the public repository URL.
+literal github.com/zaitsew/casavpn/
 
 # Published by the GitHub merge button on 2026-10-16 (pull request #1). The
 # maintainer acknowledged its author name by merging this line; public history

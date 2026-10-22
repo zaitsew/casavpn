@@ -17,7 +17,7 @@ public struct URLSessionTransport: HTTPTransport {
         configuration.waitsForConnectivity = false
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
-        self.session = URLSession(configuration: configuration)
+        self.session = URLSession(configuration: configuration, delegate: RedirectGuard(), delegateQueue: nil)
     }
 
     /// Cancels every request in flight and refuses new ones. Make a new transport afterwards.
@@ -32,13 +32,43 @@ public struct URLSessionTransport: HTTPTransport {
     }
 }
 
+/// The app follows a redirect only inside one origin (same scheme, host and port). A 307 or 308 keeps
+/// the method and the body, so following one to another server would send it the password, the 2FA
+/// code or a token. A refused redirect comes back as the 3xx response itself.
+public enum RedirectPolicy {
+    public static func allows(from: URL?, to: URL?) -> Bool {
+        guard let from, let to, let a = origin(from), let b = origin(to) else { return false }
+        return a == b
+    }
+
+    private static func origin(_ url: URL) -> String? {
+        guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased(), !host.isEmpty else { return nil }
+        let port = url.port ?? (scheme == "https" ? 443 : scheme == "http" ? 80 : 0)
+        return "\(scheme)://\(host):\(port)"
+    }
+}
+
+final class RedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(RedirectPolicy.allows(from: task.originalRequest?.url ?? response.url, to: request.url) ? request : nil)
+    }
+}
+
 /// How a failure should be presented, shared by the relay and the panel errors.
 public enum FailureKind: Equatable, Sendable {
-    /// The server could not be reached (timeout, no route, DNS, TLS).
+    /// The server could not be reached (timeout, no route, DNS).
     case unreachable
-    /// 401: the token is wrong, revoked or disabled.
+    /// The TLS handshake failed (bad, expired or mismatched certificate).
+    case tls
+    /// A proxy in front of the panel answered with a web page (403, 404, a login wall):
+    /// the network is refused, the token is not at fault.
+    case refused
+    /// 401: the token or the session is wrong, revoked, disabled or expired.
     case unauthorized
-    /// 403: the token is valid but its scope does not allow the request.
+    /// 403 from the panel itself: the token is valid but its scope does not allow the request.
     case forbidden(String)
     case other(String)
 }

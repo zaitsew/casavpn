@@ -12,20 +12,24 @@ enum LoadState: Equatable {
     case loaded
     case notConfigured
     case unreachable
+    /// The TLS handshake failed (certificate).
+    case tls
+    /// A proxy or firewall in front of the panel refused this network.
+    case refused
     case unauthorized
     case forbidden
     case failed(String)
 
     var isFailure: Bool {
         switch self {
-        case .unreachable, .unauthorized, .forbidden, .failed: true
+        case .unreachable, .tls, .refused, .unauthorized, .forbidden, .failed: true
         default: false
         }
     }
 }
 
 enum AppTab: Hashable {
-    case status, clients, alerts, settings
+    case status, inbounds, clients, alerts, settings
 }
 
 @MainActor
@@ -39,41 +43,65 @@ final class AppModel {
     /// Alert ids pushed on the Alerts tab's navigation stack.
     var alertPath: [String] = []
     var pendingPairing: ConnectionSettings?
+    /// True while the sign-in sheet is open over the tabs (the session or token stopped working).
+    var showReauth = false
 
     private(set) var settings: ConnectionSettings
 
-    private(set) var monitor: Monitor?
-    private(set) var alerts: [VPNAlert] = []
-    private(set) var relayState: LoadState = .idle
+    /// The demo: bundled sample data, no network, writes held in memory.
+    var isDemo = false
+    var demoPanel: DemoPanel?
+    /// A person with a relay but no panel can leave the sign-in screen; remembered across launches.
+    var signInSkipped: Bool
 
-    private(set) var serverStatus: ServerStatus?
-    private(set) var statusState: LoadState = .idle
+    var monitor: Monitor?
+    var alerts: [VPNAlert] = []
+    var relayState: LoadState = .idle
 
-    private(set) var clients: [VPNClient] = []
-    private(set) var onlineEmails: Set<String> = []
-    private(set) var clientsState: LoadState = .idle
-    private(set) var busyClients: Set<String> = []
+    var serverStatus: ServerStatus?
+    var statusState: LoadState = .idle
 
-    var clientError: String?
+    var inbounds: [Inbound] = []
+    var inboundsState: LoadState = .idle
+    var busyInbounds: Set<Int> = []
+
+    var clients: [VPNClient] = []
+    var onlineEmails: Set<String> = []
+    var clientsState: LoadState = .idle
+    var busyClients: Set<String> = []
+    /// The subscription base the panel advertises, when `Settings` has none.
+    var advertisedSubscriptionBase: String?
+
+    /// Shown as an alert by the tabs: what a change on the panel could not do.
+    var actionError: String?
+    /// Alerts made on this phone in the demo (the test alert).
+    var localAlerts: [VPNAlert] = []
+    /// Shown in Settings after Sign out when the app's token could not be deleted on the panel.
+    var signOutNote: String?
 
     private(set) var pushEnabled: Bool
     private(set) var pushAuthorization: UNAuthorizationStatus = .notDetermined
     private(set) var pushMessage: String?
-    private(set) var testMessage: String?
-    private(set) var isSendingTest = false
+    var testMessage: String?
+    var isSendingTest = false
     private(set) var saveError: String?
 
     // MARK: Private
 
-    private let store: SettingsStore
-    private let defaults: UserDefaults
+    let store: SettingsStore
+    let defaults: UserDefaults
     private var deviceToken: String?
     /// Bumped whenever the connection details change. A result that started under an older
     /// epoch is dropped, so a slow answer from the old server never shows up under the new one.
-    private var epoch = 0
-    private var transport = URLSessionTransport()
-    private var relayFlight: Int?
-    private var statusFlight: Int?
+    var epoch = 0
+    var transport = URLSessionTransport()
+    /// Runs panel sign-ins so that one finished after Sign out or Cancel is dropped and its token deleted.
+    let signInCoordinator = SignInCoordinator()
+    var relayFlight: Int?
+    var statusFlight: Int?
+    var inboundsFlight: Int?
+    /// Orders inbound refreshes: an answer that started before an accepted one is dropped.
+    var inboundTickets = SnapshotSequencer()
     /// The refresh that is running, by epoch and ticket. Whoever set it clears it, and only if it is still theirs.
     private var clientsFlight: (epoch: Int, ticket: Int)?
     private var clientTickets = SnapshotSequencer()
@@ -81,12 +109,15 @@ final class AppModel {
     private var pushChain: Task<Void, Never>?
     private var pushApplied: Bool
 
-    private enum DefaultsKey {
+    enum DefaultsKey {
+        static let signInSkipped = "signInSkipped"
         static let pushEnabled = "pushEnabled"
         static let registrationFingerprint = "registrationFingerprint"
         static let registeredAt = "registeredAt"
         /// The device token the relay holds for this phone; removed only after the relay confirmed a delete.
         static let registeredToken = "registeredToken"
+        /// Set when Sign out could not delete every Keychain item; the next launch tries again before loading anything.
+        static let pendingWipe = "pendingKeychainWipe"
     }
 
     /// A registration is repeated after this long even when nothing changed, in case the relay dropped the device.
@@ -95,7 +126,23 @@ final class AppModel {
     init(store: SettingsStore = SettingsStore(), defaults: UserDefaults = .standard) {
         self.store = store
         self.defaults = defaults
-        self.settings = store.load()
+        var startNote: String?
+        var loaded: ConnectionSettings
+        if defaults.bool(forKey: DefaultsKey.pendingWipe) {
+            // A Sign out left items behind: finish it before anything is read, or the old sign-in would come back.
+            if store.deleteAllRetrying() == nil {
+                defaults.removeObject(forKey: DefaultsKey.pendingWipe)
+                loaded = store.load()
+            } else {
+                startNote = Self.wipeNote(left: store.storedItems())
+                loaded = .empty
+            }
+        } else {
+            loaded = store.load()
+        }
+        self.settings = loaded
+        self.signOutNote = startNote
+        self.signInSkipped = defaults.bool(forKey: DefaultsKey.signInSkipped)
         let push = defaults.bool(forKey: DefaultsKey.pushEnabled)
         self.pushEnabled = push
         self.pushApplied = push
@@ -104,13 +151,31 @@ final class AppModel {
     // MARK: Clients of the two servers
 
     private var relayClient: RelayClient? {
-        guard settings.hasRelay, let base = settings.relayBase else { return nil }
+        guard !isDemo, settings.hasRelay, let base = settings.relayBase else { return nil }
         return RelayClient(baseURL: base, token: settings.relayToken, transport: transport)
     }
 
-    private var panelClient: PanelClient? {
-        guard settings.hasPanel, let base = settings.panelBase else { return nil }
-        return PanelClient(baseURL: base, token: settings.panelToken, transport: transport)
+    /// The panel the tabs talk to: the demo, or the real panel with the saved token or session and headers.
+    var panel: (any PanelAPI)? {
+        if isDemo { return demoPanel }
+        return PanelClient(settings: settings, transport: transport)
+    }
+
+    /// True when the tabs can show panel data: signed in, paired, or in the demo.
+    var hasPanelAccess: Bool { isDemo || settings.hasPanel }
+
+    /// The sign-in screen replaces the tabs until the app has a panel (or the person chose alerts only).
+    var needsSignIn: Bool { !hasPanelAccess && !(signInSkipped && settings.hasRelay) }
+
+    /// What share links are built from: the demo's host, or the saved settings.
+    var activeSettings: ConnectionSettings {
+        isDemo ? ConnectionSettings(subURL: DemoPanel.subscriptionBaseURL) : settings
+    }
+
+    func skipSignIn() {
+        guard settings.hasRelay else { return }
+        signInSkipped = true
+        defaults.set(true, forKey: DefaultsKey.signInSkipped)
     }
 
     // MARK: Launch
@@ -126,13 +191,20 @@ final class AppModel {
     func refreshAll() async {
         async let relay: Void = refreshRelay()
         async let status: Void = refreshStatus()
+        async let inbounds: Void = refreshInbounds()
         async let clients: Void = refreshClients()
-        _ = await (relay, status, clients)
+        _ = await (relay, status, inbounds, clients)
     }
 
     // MARK: Relay
 
     func refreshRelay() async {
+        if isDemo {
+            alerts = localAlerts + DemoAlerts.sample(now: Date())
+            monitor = DemoAlerts.monitor(now: Date())
+            relayState = .loaded
+            return
+        }
         guard let client = relayClient else {
             monitor = nil; alerts = []; relayState = .notConfigured
             return
@@ -161,7 +233,7 @@ final class AppModel {
     // MARK: Panel
 
     func refreshStatus() async {
-        guard let client = panelClient else {
+        guard let client = panel else {
             serverStatus = nil; statusState = .notConfigured
             return
         }
@@ -189,7 +261,7 @@ final class AppModel {
     /// `force` runs even when a refresh is already in flight (after a toggle: that refresh may
     /// have started before the change). Answers are applied in the order the requests started.
     func refreshClients(force: Bool = false) async {
-        guard let client = panelClient else {
+        guard let client = panel else {
             clients = []; onlineEmails = []; clientsState = .notConfigured
             return
         }
@@ -226,7 +298,7 @@ final class AppModel {
     /// Turns a client on or off. The switch moves at once and moves back if the panel refuses.
     /// A change of connection details while it runs cancels it, and its result is dropped.
     func setClient(_ client: VPNClient, enabled: Bool) async {
-        guard let panel = panelClient, !busyClients.contains(client.email) else { return }
+        guard let panel, !busyClients.contains(client.email) else { return }
         let gen = epoch
         busyClients.insert(client.email)
         replace(email: client.email) { $0.enable = enabled }
@@ -239,17 +311,24 @@ final class AppModel {
         } catch {
             guard gen == epoch else { return }
             replace(email: client.email) { $0.enable = !enabled }
-            clientError = "Could not \(enabled ? "turn on" : "turn off") \(client.email). \(error.localizedDescription)"
+            actionError = "Could not \(enabled ? "turn on" : "turn off") \(client.email). \(error.localizedDescription)"
         }
     }
 
-    private func replace(email: String, _ change: (inout VPNClient) -> Void) {
+    func replace(email: String, _ change: (inout VPNClient) -> Void) {
         guard let index = clients.firstIndex(where: { $0.email == email }) else { return }
         change(&clients[index])
     }
 
     func subscriptionLink(for client: VPNClient) -> String? {
-        settings.subscriptionLink(subId: client.subId)
+        subscriptionLink(subId: client.subId)
+    }
+
+    /// The saved base URL wins; otherwise the base the panel advertises (`subURI`).
+    func subscriptionLink(subId: String) -> String? {
+        if let link = activeSettings.subscriptionLink(subId: subId) { return link }
+        guard let base = advertisedSubscriptionBase else { return nil }
+        return ConnectionSettings(subURL: base).subscriptionLink(subId: subId)
     }
 
     // MARK: Alerts
@@ -270,16 +349,25 @@ final class AppModel {
 
     // MARK: Settings
 
-    func save(_ new: ConnectionSettings) {
-        let old = settings
+    /// Saves to the Keychain, then applies. Returns false (and applies nothing) when the Keychain refused.
+    @discardableResult
+    func save(_ new: ConnectionSettings) -> Bool {
         let normalized = new.normalized()
         do {
             try store.save(normalized)
             saveError = nil
         } catch {
             saveError = error.localizedDescription
-            return
+            return false
         }
+        defaults.removeObject(forKey: DefaultsKey.pendingWipe)
+        apply(normalized)
+        return true
+    }
+
+    /// Makes `normalized` the connection in memory: cancels what is in flight and forgets the old server's data.
+    func apply(_ normalized: ConnectionSettings) {
+        let old = settings
         guard normalized != old else { return }
         settings = normalized
 
@@ -287,10 +375,11 @@ final class AppModel {
         epoch += 1
         transport.cancelAll()
         transport = URLSessionTransport()
-        relayFlight = nil; statusFlight = nil; clientsFlight = nil
-        busyClients = []
-        clients = []; onlineEmails = []; serverStatus = nil; alerts = []; monitor = nil
-        relayState = .idle; statusState = .idle; clientsState = .idle
+        relayFlight = nil; statusFlight = nil; inboundsFlight = nil; clientsFlight = nil
+        busyClients = []; busyInbounds = []
+        clients = []; onlineEmails = []; inbounds = []; serverStatus = nil; alerts = []; monitor = nil
+        advertisedSubscriptionBase = nil
+        relayState = .idle; statusState = .idle; inboundsState = .idle; clientsState = .idle
 
         let relayChanged = old.relayURL != normalized.relayURL || old.relayToken != normalized.relayToken
         if relayChanged {
@@ -307,6 +396,12 @@ final class AppModel {
             await refreshAll()
             await syncRegistration()
         }
+    }
+
+    static func wipeNote(left: [String]) -> String {
+        let what = left.isEmpty ? "some sign-in details" : left.joined(separator: ", ")
+        return "Signed out, but the iPhone Keychain still holds \(what). The app tries to remove them again when it opens. "
+            + "Deleting the app does not remove them: iOS keeps Keychain items after an app is deleted."
     }
 
     func proposePairing(from text: String) -> String? {
@@ -469,9 +564,11 @@ final class AppModel {
         return SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    private static func state(for kind: FailureKind) -> LoadState {
+    static func state(for kind: FailureKind) -> LoadState {
         switch kind {
         case .unreachable: .unreachable
+        case .tls: .tls
+        case .refused: .refused
         case .unauthorized: .unauthorized
         case .forbidden: .forbidden
         case .other(let message): .failed(message)

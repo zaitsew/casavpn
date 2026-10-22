@@ -93,6 +93,75 @@ struct SettingsTests {
         #expect(store.load() == .empty)
         #expect(memory.keys.isEmpty)
     }
+
+    @Test func deleteAllRemovesEveryItemOfTheServer() throws {
+        let memory = InMemorySecretStore()
+        let store = SettingsStore(secrets: memory)
+        var settings = ConnectionSettings(
+            panelURL: "https://vpn.example.com/p", panelToken: "tok", relayURL: "https://r.example.com",
+            relayToken: "rt", subURL: "https://vpn.example.com/sub/"
+        )
+        settings.panelUser = "admin"
+        settings.panelSession = "cookie"
+        settings.panelCSRF = "csrf"
+        settings.panelHeaders = [CustomHeader(name: "CF-Access-Client-Id", value: "id.example"), CustomHeader(name: "CF-Access-Client-Secret", value: "secret")]
+        try store.save(settings)
+        // Items of the first app versions that were never migrated.
+        try memory.write("https://old.example.com", for: "panelURL")
+        try memory.write("old-token", for: "relayToken")
+        #expect(!memory.keys.isEmpty)
+        try store.deleteAll()
+        #expect(memory.keys.isEmpty)
+        #expect(store.load() == .empty)
+    }
+}
+
+@Suite("Sign-out wipe")
+struct SignOutWipeTests {
+    @Test func aFailedDeleteIsReportedWithWhatIsStillStoredThenRetried() throws {
+        let flaky = FlakySecretStore()
+        let store = SettingsStore(secrets: flaky)
+        var settings = ConnectionSettings(panelURL: "https://vpn.example.com/p", panelToken: "tok", relayURL: "https://r.example.com", relayToken: "rt")
+        settings.panelHeaders = [CustomHeader(name: "CF-Access-Client-Id", value: "id.example")]
+        try store.save(settings)
+
+        flaky.failWrites = true
+        #expect(store.deleteAllRetrying(attempts: 2) != nil)
+        let left = store.storedItems()
+        #expect(left.contains("the panel API token"))
+        #expect(left.contains("the extra request headers"))
+        #expect(left.contains("the relay token"))
+
+        // The retry (the next launch) succeeds once the Keychain answers again.
+        flaky.failWrites = false
+        #expect(store.deleteAllRetrying() == nil)
+        #expect(store.storedItems().isEmpty)
+        #expect(flaky.inner.keys.isEmpty)
+    }
+}
+
+@Suite("Sign-out wipe of legacy items")
+struct LegacyWipeTests {
+    @Test func aLegacyItemThatCannotBeDeletedFailsTheWipe() throws {
+        let stubborn = StubbornKeySecretStore(key: "panelToken")
+        try stubborn.inner.write("old-token", for: "panelToken")
+        let store = SettingsStore(secrets: stubborn)
+        #expect(throws: KeychainError.self) { try store.deleteAll() }
+        #expect(store.deleteAllRetrying(attempts: 2) != nil)
+        #expect(store.storedItems().contains("the panel API token"))
+    }
+}
+
+/// A store that cannot delete one key.
+final class StubbornKeySecretStore: SecretStore, @unchecked Sendable {
+    let inner = InMemorySecretStore()
+    let key: String
+    init(key: String) { self.key = key }
+    func read(_ key: String) -> String? { inner.read(key) }
+    func write(_ value: String?, for key: String) throws {
+        if value == nil, key == self.key { throw KeychainError.status(-25308) }
+        try inner.write(value, for: key)
+    }
 }
 
 /// A store whose writes can be made to fail.

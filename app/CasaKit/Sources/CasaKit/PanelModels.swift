@@ -85,14 +85,36 @@ public struct ServerStatus: Decodable, Equatable, Sendable {
     /// 1, 5 and 15 minute load averages.
     public var loads: [Double]
     public var tcpCount: Int
+    public var udpCount: Int
+    /// Current network speed in bytes per second (`netIO`).
+    public var netUp: UInt64
+    public var netDown: UInt64
+    /// Bytes sent and received since the host booted (`netTraffic`).
+    public var netSent: UInt64
+    public var netReceived: UInt64
     public var panelVersion: String
     public var publicIPv4: String?
     public var publicIPv6: String?
 
     private enum CodingKeys: String, CodingKey {
-        case cpu, cpuCores, mem, swap, disk, xray, uptime, loads, tcpCount, panelVersion, publicIP
+        case cpu, cpuCores, mem, swap, disk, xray, uptime, loads, tcpCount, udpCount, panelVersion, publicIP
+        case netIO, netTraffic
     }
     private enum IPKeys: String, CodingKey { case ipv4, ipv6 }
+    private enum NetIOKeys: String, CodingKey { case up, down }
+    private enum NetTrafficKeys: String, CodingKey { case sent, recv }
+
+    public init(
+        cpu: Double = 0, cpuCores: Int = 0, mem: Usage = Usage(), swap: Usage = Usage(), disk: Usage = Usage(),
+        xray: Xray = Xray(), uptime: UInt64 = 0, loads: [Double] = [], tcpCount: Int = 0, udpCount: Int = 0,
+        netUp: UInt64 = 0, netDown: UInt64 = 0, netSent: UInt64 = 0, netReceived: UInt64 = 0,
+        panelVersion: String = "", publicIPv4: String? = nil, publicIPv6: String? = nil
+    ) {
+        self.cpu = cpu; self.cpuCores = cpuCores; self.mem = mem; self.swap = swap; self.disk = disk
+        self.xray = xray; self.uptime = uptime; self.loads = loads; self.tcpCount = tcpCount; self.udpCount = udpCount
+        self.netUp = netUp; self.netDown = netDown; self.netSent = netSent; self.netReceived = netReceived
+        self.panelVersion = panelVersion; self.publicIPv4 = publicIPv4; self.publicIPv6 = publicIPv6
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -105,7 +127,16 @@ public struct ServerStatus: Decodable, Equatable, Sendable {
         uptime = try c.decodeIfPresent(UInt64.self, forKey: .uptime) ?? 0
         loads = try c.decodeIfPresent([Double].self, forKey: .loads) ?? []
         tcpCount = try c.decodeIfPresent(Int.self, forKey: .tcpCount) ?? 0
+        udpCount = try c.decodeIfPresent(Int.self, forKey: .udpCount) ?? 0
         panelVersion = try c.decodeIfPresent(String.self, forKey: .panelVersion) ?? ""
+        if let io = try? c.nestedContainer(keyedBy: NetIOKeys.self, forKey: .netIO) {
+            netUp = (try? io.decodeIfPresent(UInt64.self, forKey: .up)).flatMap { $0 } ?? 0
+            netDown = (try? io.decodeIfPresent(UInt64.self, forKey: .down)).flatMap { $0 } ?? 0
+        } else { netUp = 0; netDown = 0 }
+        if let t = try? c.nestedContainer(keyedBy: NetTrafficKeys.self, forKey: .netTraffic) {
+            netSent = (try? t.decodeIfPresent(UInt64.self, forKey: .sent)).flatMap { $0 } ?? 0
+            netReceived = (try? t.decodeIfPresent(UInt64.self, forKey: .recv)).flatMap { $0 } ?? 0
+        } else { netSent = 0; netReceived = 0 }
         if let ip = try? c.nestedContainer(keyedBy: IPKeys.self, forKey: .publicIP) {
             publicIPv4 = (try? ip.decodeIfPresent(String.self, forKey: .ipv4)).flatMap { $0.isEmpty ? nil : $0 }
             publicIPv6 = (try? ip.decodeIfPresent(String.self, forKey: .ipv6)).flatMap { $0.isEmpty ? nil : $0 }
@@ -115,6 +146,9 @@ public struct ServerStatus: Decodable, Equatable, Sendable {
 
 /// Usage counters the panel keeps per client (`xray.ClientTraffic`).
 public struct ClientTraffic: Decodable, Equatable, Sendable {
+    public var email: String
+    public var inboundId: Int
+    public var enable: Bool
     public var up: Int64
     public var down: Int64
     /// The traffic limit in bytes; 0 means unlimited.
@@ -122,16 +156,25 @@ public struct ClientTraffic: Decodable, Equatable, Sendable {
     /// Unix milliseconds of the last connection; 0 when never.
     public var lastOnline: Int64
 
-    public init(up: Int64 = 0, down: Int64 = 0, total: Int64 = 0, lastOnline: Int64 = 0) {
+    public init(
+        up: Int64 = 0, down: Int64 = 0, total: Int64 = 0, lastOnline: Int64 = 0,
+        email: String = "", inboundId: Int = 0, enable: Bool = true
+    ) {
         self.up = up
         self.down = down
         self.total = total
         self.lastOnline = lastOnline
+        self.email = email
+        self.inboundId = inboundId
+        self.enable = enable
     }
 
-    private enum CodingKeys: String, CodingKey { case up, down, total, lastOnline }
+    private enum CodingKeys: String, CodingKey { case up, down, total, lastOnline, email, inboundId, enable }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        email = try c.decodeIfPresent(String.self, forKey: .email) ?? ""
+        inboundId = try c.decodeIfPresent(Int.self, forKey: .inboundId) ?? 0
+        enable = try c.decodeIfPresent(Bool.self, forKey: .enable) ?? true
         up = try c.decodeIfPresent(Int64.self, forKey: .up) ?? 0
         down = try c.decodeIfPresent(Int64.self, forKey: .down) ?? 0
         total = try c.decodeIfPresent(Int64.self, forKey: .total) ?? 0
@@ -152,13 +195,20 @@ public struct VPNClient: Decodable, Equatable, Identifiable, Sendable {
     public var comment: String
     public var group: String
     public var traffic: ClientTraffic?
+    /// The inbounds the client is attached to.
+    public var inboundIds: [Int]
+    /// How many IP addresses may use the client at once; 0 means no limit.
+    public var limitIp: Int
 
     public var id: String { email }
 
     public init(
         email: String, subId: String = "", enable: Bool = true, totalBytes: Int64 = 0,
-        expiryTime: Int64 = 0, comment: String = "", group: String = "", traffic: ClientTraffic? = nil
+        expiryTime: Int64 = 0, comment: String = "", group: String = "", traffic: ClientTraffic? = nil,
+        inboundIds: [Int] = [], limitIp: Int = 0
     ) {
+        self.inboundIds = inboundIds
+        self.limitIp = limitIp
         self.email = email
         self.subId = subId
         self.enable = enable
@@ -178,7 +228,7 @@ public struct VPNClient: Decodable, Equatable, Identifiable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case email, subId, enable, totalGB, expiryTime, comment, group, traffic
+        case email, subId, enable, totalGB, expiryTime, comment, group, traffic, inboundIds, limitIp
     }
 
     public init(from decoder: Decoder) throws {
@@ -191,6 +241,8 @@ public struct VPNClient: Decodable, Equatable, Identifiable, Sendable {
         comment = try c.decodeIfPresent(String.self, forKey: .comment) ?? ""
         group = try c.decodeIfPresent(String.self, forKey: .group) ?? ""
         traffic = try c.decodeIfPresent(ClientTraffic.self, forKey: .traffic)
+        inboundIds = try c.decodeIfPresent([Int].self, forKey: .inboundIds) ?? []
+        limitIp = try c.decodeIfPresent(Int.self, forKey: .limitIp) ?? 0
     }
 }
 
@@ -228,6 +280,11 @@ public struct ClientsSnapshot: Equatable, Sendable {
     public var clients: [VPNClient]
     /// Emails of the clients with an open connection now.
     public var online: Set<String>
+
+    public init(clients: [VPNClient], online: Set<String>) {
+        self.clients = clients
+        self.online = online
+    }
 }
 
 /// `GET /panel/api/clients/get/:email` -> `{"client": <ClientRecord>, "inboundIds": [...], ...}`.
@@ -235,6 +292,7 @@ public struct ClientsSnapshot: Equatable, Sendable {
 struct ClientRecordPayload: Decodable {
     struct Record: Decodable {
         var email: String
+        var uuid: String
         var subId: String
         var security: String
         var flow: String
@@ -254,13 +312,14 @@ struct ClientRecordPayload: Decodable {
         var trafficResetDay: Int
 
         private enum CodingKeys: String, CodingKey {
-            case email, subId, security, flow, limitIp, limitHwid, totalGB, expiryTime, enable, tgId
+            case email, uuid, subId, security, flow, limitIp, limitHwid, totalGB, expiryTime, enable, tgId
             case group, comment, reset, resetDay, resetWeekday, resetMax, trafficReset, trafficResetDay
         }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             email = try c.decode(String.self, forKey: .email)
+            uuid = try c.decodeIfPresent(String.self, forKey: .uuid) ?? ""
             subId = try c.decodeIfPresent(String.self, forKey: .subId) ?? ""
             security = try c.decodeIfPresent(String.self, forKey: .security) ?? ""
             flow = try c.decodeIfPresent(String.self, forKey: .flow) ?? ""
@@ -282,6 +341,16 @@ struct ClientRecordPayload: Decodable {
     }
 
     var client: Record
+    var inboundIds: [Int]
+    var usedTraffic: Int64
+
+    private enum CodingKeys: String, CodingKey { case client, inboundIds, usedTraffic }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        client = try c.decode(Record.self, forKey: .client)
+        inboundIds = try c.decodeIfPresent([Int].self, forKey: .inboundIds) ?? []
+        usedTraffic = try c.decodeIfPresent(Int64.self, forKey: .usedTraffic) ?? 0
+    }
 }
 
 /// The body of `POST /panel/api/clients/update/:email` (a `model.Client`).
@@ -329,5 +398,20 @@ struct ClientUpdateBody: Encodable, Equatable {
         resetMax = record.resetMax
         trafficReset = record.trafficReset
         trafficResetDay = record.trafficResetDay
+    }
+
+    /// The same body with the fields the edit form owns replaced. Everything else is repeated
+    /// from the stored record, because the panel overwrites every field it receives.
+    init(from record: ClientRecordPayload.Record, applying draft: ClientDraft) {
+        self.init(from: record, enable: draft.enable)
+        // The route names the stored client; the body carries the name it should have afterwards.
+        let name = draft.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { email = name }
+        totalGB = draft.totalBytes
+        expiryTime = draft.expiry.milliseconds
+        limitIp = max(0, draft.limitIp)
+        let sub = draft.subId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !sub.isEmpty { subId = sub }
+        comment = draft.comment.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

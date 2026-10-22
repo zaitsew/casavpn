@@ -7,15 +7,21 @@ struct SettingsView: View {
     @State private var loaded = false
     @State private var showScanner = false
     @State private var pairingError: String?
+    @State private var confirmSignOut = false
+    @State private var isSigningOut = false
+    @State private var showHeaders = false
+    @State private var headerDraft: [CustomHeader] = []
 
     var body: some View {
         NavigationStack {
             Form {
-                pairingSection
-                panelSection
-                relaySection
-                subscriptionSection
-                saveSection
+                connectionSection
+                if !model.isDemo {
+                    pairingSection
+                    relaySection
+                    subscriptionSection
+                    saveSection
+                }
                 pushSection
                 aboutSection
             }
@@ -23,6 +29,23 @@ struct SettingsView: View {
             .onAppear { loadDraftOnce() }
             .onChange(of: model.settings) { _, new in draft = new }
             .sheet(isPresented: $showScanner) { scannerSheet }
+            .sheet(isPresented: $showHeaders, onDismiss: {
+                if headerDraft != model.settings.panelHeaders { model.saveHeaders(headerDraft) }
+            }) { HeadersEditor(headers: $headerDraft) }
+            .confirmationDialog("Sign out of the panel?", isPresented: $confirmSignOut, titleVisibility: .visible) {
+                Button("Sign out", role: .destructive) {
+                    Task {
+                        isSigningOut = true
+                        await model.signOut()
+                        isSigningOut = false
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(model.settings.ownsPanelToken
+                     ? "The app deletes its token \"\(model.settings.panelTokenName)\" on the panel, then removes the server, the relay and every credential saved for them from this iPhone's Keychain."
+                     : "The app removes the server, the relay and every credential saved for them from this iPhone's Keychain.")
+            }
             .alert(
                 "Could not read the link",
                 isPresented: Binding(get: { pairingError != nil }, set: { if !$0 { pairingError = nil } })
@@ -59,24 +82,77 @@ struct SettingsView: View {
                 Label("Scan QR code", systemImage: "qrcode.viewfinder")
             }
         } header: {
-            Text("Pairing")
+            Text("Pair with a code")
         } footer: {
             Text("Run casavpn-pair on the server to show a QR code, or paste the casavpn:// link it prints.")
         }
     }
 
-    private var panelSection: some View {
+    private var connectionSection: some View {
         Section {
-            urlField("https://vpn.example.com:8443/<base path>", text: $draft.panelURL)
-            SecureField("API token", text: $draft.panelToken)
-                .textContentType(.password)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
+            if model.isDemo {
+                Label("Demo mode. Nothing leaves this iPhone.", systemImage: "play.rectangle")
+                Button("Exit demo") { model.exitDemo() }
+            } else if model.settings.hasPanel {
+                LabeledContent("Server", value: displayHost(model.settings.panelURL))
+                if !model.settings.panelUser.isEmpty {
+                    LabeledContent("Signed in as", value: model.settings.panelUser)
+                }
+                LabeledContent("Access") {
+                    Text(accessText).multilineTextAlignment(.trailing)
+                }
+                Button {
+                    headerDraft = model.settings.panelHeaders
+                    showHeaders = true
+                } label: {
+                    LabeledContent("Request headers", value: model.settings.panelHeaders.isEmpty ? "None" : "\(model.settings.panelHeaders.count)")
+                }
+                .foregroundStyle(.primary)
+                Button(role: .destructive) { confirmSignOut = true } label: {
+                    HStack {
+                        Text("Sign out")
+                        if isSigningOut { Spacer(); ProgressView() }
+                    }
+                }
+                .disabled(isSigningOut)
+            } else {
+                Text("Not signed in to a panel.").foregroundStyle(.secondary)
+                Button { model.showReauth = true } label: { Label("Sign in to the panel", systemImage: "person.badge.key") }
+                DisclosureGroup("Use an API token instead") {
+                    urlField("https://vpn.example.com:8443/<base path>", text: $draft.panelURL)
+                    SecureField("API token", text: $draft.panelToken)
+                        .textContentType(.password)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
+                }
+            }
+            if let note = model.signOutNote {
+                Text(note).font(.footnote).foregroundStyle(.orange)
+            }
         } header: {
             Text("Panel")
         } footer: {
-            footer(for: draft.panelURL, fallback: "An admin token unlocks everything. A monitor token shows the Status tab only.")
+            if model.isDemo {
+                Text("The demo shows sample data from a fictional server.")
+            } else if model.settings.hasPanel {
+                footer(for: model.settings.panelURL, fallback: "The app keeps an API token, not your password. Extra headers go to a proxy in front of the panel, such as Cloudflare Access.")
+            } else {
+                footer(for: draft.panelURL, fallback: "An admin token unlocks everything. A monitor token shows the Status tab only.")
+            }
         }
+    }
+
+    private var accessText: String {
+        let s = model.settings
+        if s.ownsPanelToken { return "API token \"\(s.panelTokenName)\"" }
+        if !s.panelToken.isEmpty { return "API token you pasted" }
+        return "Session (sign in again when it expires)"
+    }
+
+    private func displayHost(_ url: String) -> String {
+        guard let host = URL(string: url)?.host else { return url }
+        if let port = URL(string: url)?.port { return "\(host):\(port)" }
+        return host
     }
 
     private var relaySection: some View {
@@ -121,7 +197,7 @@ struct SettingsView: View {
                 get: { model.pushEnabled },
                 set: { value in Task { await model.setPushEnabled(value) } }
             ))
-            .disabled(!model.settings.hasRelay)
+            .disabled(!model.settings.hasRelay || model.isDemo)
             if let message = model.pushMessage {
                 Text(message).font(.footnote).foregroundStyle(.orange)
             }
@@ -131,21 +207,23 @@ struct SettingsView: View {
                 }
             }
             Button {
-                Task { await model.sendTestAlert() }
+                Task { if model.isDemo { await model.sendDemoTestAlert() } else { await model.sendTestAlert() } }
             } label: {
                 HStack {
                     Text("Send test alert")
                     if model.isSendingTest { Spacer(); ProgressView() }
                 }
             }
-            .disabled(!model.settings.hasRelay || model.isSendingTest)
+            .disabled((!model.settings.hasRelay && !model.isDemo) || model.isSendingTest)
             if let message = model.testMessage {
                 Text(message).font(.footnote).foregroundStyle(.secondary)
             }
         } header: {
             Text("Alerts")
         } footer: {
-            Text(model.settings.hasRelay
+            Text(model.isDemo
+                 ? "The demo posts a notification on this iPhone only."
+                 : model.settings.hasRelay
                  ? "Critical alerts are delivered as time-sensitive notifications."
                  : "Set up the relay first. Critical alerts are delivered as time-sensitive notifications.")
         }

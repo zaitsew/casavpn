@@ -4,6 +4,13 @@
 
 ### Added
 
+- App 1.0.0 (build 2) replaces the 3x-ui panel on the phone. Panel-style sign-in first
+  (address, user, password, 2FA; the app makes its own API token and drops the password),
+  optional request headers per server for Cloudflare Access, honest network errors, a Status
+  tab with Xray controls and log, Inbounds (VLESS Reality add, edit, delete, reset), Clients
+  (search, add, edit, delete, reset, share links with QR) and a demo mode for App Review.
+  `CasaKit` grows the panel API layer with fake-transport tests; see [docs/APP.md](docs/APP.md).
+
 - The `monitor/` Worker is now also the alert relay of [docs/APP.md](docs/APP.md). Its own
   transitions are alerts (`vpn.down` critical, `vpn.recovered` info): recorded once in a
   history in KV (one key per alert, 30 days) and pushed to the iPhone app through APNs (ES256 JWT signed with
