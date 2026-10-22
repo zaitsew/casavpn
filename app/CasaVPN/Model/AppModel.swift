@@ -74,7 +74,8 @@ final class AppModel {
     private var transport = URLSessionTransport()
     private var relayFlight: Int?
     private var statusFlight: Int?
-    private var clientsFlight: Int?
+    /// The refresh that is running, by epoch and ticket. Whoever set it clears it, and only if it is still theirs.
+    private var clientsFlight: (epoch: Int, ticket: Int)?
     private var clientTickets = SnapshotSequencer()
     /// Push changes run one after another, in the order they were asked for.
     private var pushChain: Task<Void, Never>?
@@ -84,6 +85,8 @@ final class AppModel {
         static let pushEnabled = "pushEnabled"
         static let registrationFingerprint = "registrationFingerprint"
         static let registeredAt = "registeredAt"
+        /// The device token the relay holds for this phone; removed only after the relay confirmed a delete.
+        static let registeredToken = "registeredToken"
     }
 
     /// A registration is repeated after this long even when nothing changed, in case the relay dropped the device.
@@ -191,10 +194,10 @@ final class AppModel {
             return
         }
         let gen = epoch
-        if !force, clientsFlight == gen { return }
-        clientsFlight = gen
+        if !force, clientsFlight?.epoch == gen { return }
         let ticket = clientTickets.begin()
-        defer { if clientsFlight == gen, !force { clientsFlight = nil } }
+        clientsFlight = (gen, ticket)
+        defer { if clientsFlight?.ticket == ticket { clientsFlight = nil } }
         if clientsState != .loaded { clientsState = .loading }
         do {
             let snapshot = try await client.clients()
@@ -291,9 +294,10 @@ final class AppModel {
 
         let relayChanged = old.relayURL != normalized.relayURL || old.relayToken != normalized.relayToken
         if relayChanged {
+            // Whatever the push switch says now: if the old relay ever got this device, remove it there.
             enqueuePush {
-                if self.pushApplied, let token = self.deviceToken, old.hasRelay, let base = old.relayBase {
-                    // Best effort: the old relay should stop pushing to this phone.
+                if let token = self.registeredToken, old.hasRelay, let base = old.relayBase {
+                    // Best effort: the old credentials are not kept after this, so there is no second try.
                     try? await RelayClient(baseURL: base, token: old.relayToken).deleteDevice(token: token)
                 }
                 self.clearRegistrationRecord()
@@ -377,12 +381,17 @@ final class AppModel {
             await performRegistration()
         } else {
             pushApplied = false
-            if let token = deviceToken, let client = relayClient {
-                do { try await client.deleteDevice(token: token) } catch {
+            if let token = registeredToken ?? deviceToken, let client = relayClient {
+                do {
+                    try await client.deleteDevice(token: token)
+                    clearRegistrationRecord()
+                } catch {
+                    // The record stays: a later relay change still removes the device from this relay.
                     pushMessage = "Push is off on this iPhone, but the relay could not be told: \(error.localizedDescription)"
                 }
+            } else {
+                clearRegistrationRecord()
             }
-            clearRegistrationRecord()
             UIApplication.shared.unregisterForRemoteNotifications()
         }
     }
@@ -417,6 +426,7 @@ final class AppModel {
             guard gen == epoch else { return }
             defaults.set(fingerprint, forKey: DefaultsKey.registrationFingerprint)
             defaults.set(Date(), forKey: DefaultsKey.registeredAt)
+            defaults.set(token, forKey: DefaultsKey.registeredToken)
             pushMessage = nil
         } catch {
             guard gen == epoch else { return }
@@ -445,9 +455,12 @@ final class AppModel {
 
     // MARK: Helpers
 
+    private var registeredToken: String? { defaults.string(forKey: DefaultsKey.registeredToken) }
+
     private func clearRegistrationRecord() {
         defaults.removeObject(forKey: DefaultsKey.registrationFingerprint)
         defaults.removeObject(forKey: DefaultsKey.registeredAt)
+        defaults.removeObject(forKey: DefaultsKey.registeredToken)
     }
 
     private static func fingerprint(registration: DeviceRegistration, settings: ConnectionSettings) -> String {
