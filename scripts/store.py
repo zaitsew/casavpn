@@ -90,8 +90,9 @@ AGE_RATING_NONE = {
 
 # Screenshot display types per required slot. The 6.9" slot accepts either type name: the
 # API names the 6.9" family APP_IPHONE_69 on newer accounts and APP_IPHONE_67 on older ones.
-SCREENSHOT_SLOTS = {'6.9" display': ("APP_IPHONE_69", "APP_IPHONE_67"),
-                    '6.5" display': ("APP_IPHONE_65",)}
+# Apple needs one iPhone set: 6.9" (or 6.7"), or 6.5" when there is no 6.9" set.
+# It scales that set down for the smaller phones.
+SCREENSHOT_SLOTS = {'iPhone 6.9" or 6.5"': ("APP_IPHONE_69", "APP_IPHONE_67", "APP_IPHONE_65")}
 
 CONTACT_KEYS = ("first_name", "last_name", "phone", "email")
 # The copyright line names the seller, so it lives in contact.local.json too ("copyright",
@@ -623,8 +624,10 @@ def remote_checks(asc: Asc, rep: Report) -> None:
              f"no uploaded build is for version {vstr} (builds are for: "
              f"{', '.join(sorted(built)) or 'none'}); set MARKETING_VERSION to {vstr}")
 
-    sched = asc.get(f"/v1/apps/{asc.app}/appPriceSchedule/manualPrices")
-    rep.test(bool(sched.get("data")), "price schedule is set",
+    sched = asc.get(f"/v1/apps/{asc.app}/appPriceSchedule").get("data")
+    prices = (asc.get(f"/v1/appPriceSchedules/{sched['id']}/manualPrices").get("data")
+              if sched else None)
+    rep.test(bool(prices), "price schedule is set",
              "price schedule is not set (website: Pricing and Availability, choose Free)")
 
     for field in ("supportUrl", "privacyPolicyUrl"):

@@ -30,7 +30,8 @@ SDKs.
 
 - **On your iPhone, in the Keychain:** your panel address and credentials and your relay
   address and token. They never leave the device except to reach the service they belong to.
-  Deleting the app removes them.
+  iOS can keep Keychain items after the app is deleted, so sign out in Settings first:
+  signing out removes them.
 - **On your iPhone, in app storage:** settings such as which server is selected.
 - **On your own relay:** your iPhone's push (APNs) device token, and the alert history your
   server sent (for example "a user ran out of traffic"). The relay is yours, and you control
