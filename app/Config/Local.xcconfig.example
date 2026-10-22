@@ -1,0 +1,4 @@
+// Copy to Local.xcconfig (ignored by git) and fill in your own values.
+// The bundle id must match the APNS_TOPIC secret of the relay.
+CASAVPN_BUNDLE_ID = com.example.casavpn
+CASAVPN_TEAM_ID =

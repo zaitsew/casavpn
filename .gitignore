@@ -27,3 +27,12 @@ node_modules/
 .DS_Store
 __pycache__/
 *.pyc
+
+# iPhone app (app/)
+app/*.xcodeproj/
+app/Config/Local.xcconfig
+app/CasaKit/.build/
+app/CasaKit/.swiftpm/
+xcuserdata/
+*.xcuserstate
+DerivedData/
