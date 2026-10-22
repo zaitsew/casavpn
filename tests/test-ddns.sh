@@ -32,7 +32,7 @@ while [ $# -gt 0 ]; do
     -H) headers="$headers|$2"; shift ;;
     --noproxy) np="$2"; shift ;;
     -K) has_cfg=1; shift ;;
-    -f|-fsS) fail_http=1 ;;
+    -f|-fsS|-fsSg) fail_http=1 ;;
     --max-time|--connect-timeout|--retry|--retry-delay|--retry-max-time) shift ;;
     http*) url="$1" ;;
   esac

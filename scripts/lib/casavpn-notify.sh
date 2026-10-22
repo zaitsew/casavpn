@@ -145,12 +145,14 @@ casavpn_notify_ntfy() {
   fi
   # The topic in NTFY_URL is the only secret of the channel, so the URL goes to curl
   # in a config on stdin, not in argv. Refuse characters that could end the value.
+  # Brackets are allowed for an IPv6 host (https://[2001:db8::1]/topic); -g stops
+  # curl from reading them as a URL glob.
   case "$NTFY_URL" in
-    *[!A-Za-z0-9._~:/?\&=%+,@-]*) _notify_log "NTFY_URL has characters a URL should not have; not sending"; return 1 ;;
+    *[!][A-Za-z0-9._~:/?\&=%+,@-]*) _notify_log "NTFY_URL has characters a URL should not have; not sending"; return 1 ;;
   esac
   crc=0
   printf 'url = "%s"\n' "$NTFY_URL" \
-    | curl -fsS --max-time 10 --connect-timeout 5 -K - -H "Title: $title" -H "Priority: $prio" -H "Tags: $tag" \
+    | curl -fsSg --max-time 10 --connect-timeout 5 -K - -H "Title: $title" -H "Priority: $prio" -H "Tags: $tag" \
         -d "$body" >/dev/null 2>&1 || crc=$?
   if [ "$crc" -ne 0 ]; then
     # 6 no host, 7 no connection, 28 timeout, 35 TLS, 52/56 empty reply or reset.

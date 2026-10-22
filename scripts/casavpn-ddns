@@ -216,10 +216,11 @@ deliver() {
       log "alert '$key' suppressed (already sent within the hour)"
     # -f: an HTTP 4xx/5xx (429, 503...) is a failed delivery, so the rate-limit
     # state is only written on 2xx and the next run retries. The topic in the URL is
-    # the channel's only secret: it goes to curl on stdin, not in argv.
-    elif [[ "$NTFY_URL" != *[!A-Za-z0-9._~:/?\&=%+,@-]* ]] \
+    # the channel's only secret: it goes to curl on stdin, not in argv. Brackets are
+    # for an IPv6 host; -g stops curl from reading them as a URL glob.
+    elif [[ "$NTFY_URL" != *[!][A-Za-z0-9._~:/?\&=%+,@-]* ]] \
          && printf 'url = "%s"\n' "$NTFY_URL" \
-            | curl -fsS --max-time 10 --connect-timeout 5 -K - \
+            | curl -fsSg --max-time 10 --connect-timeout 5 -K - \
                 -H "Title: $title" -H "Priority: $prio" -H "Tags: satellite" \
                 -d "$msg" >/dev/null; then
       write_state "alert-$safe" "$now"
