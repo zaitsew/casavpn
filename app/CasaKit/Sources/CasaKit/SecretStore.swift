@@ -130,8 +130,13 @@ public struct SettingsStore: Sendable {
     /// credential, token, session, extra headers, relay address and token, subscription base) and
     /// the per-field items of the first versions. Sign out calls this.
     public func deleteAll() throws {
-        try secrets.write(nil, for: Key.connection)
-        for key in Key.legacy { try? secrets.write(nil, for: key) }
+        // Try every item, then report the first failure: a legacy item left behind would be
+        // migrated back on the next launch.
+        var first: Error?
+        for key in [Key.connection] + Key.legacy {
+            do { try secrets.write(nil, for: key) } catch { if first == nil { first = error } }
+        }
+        if let first { throw first }
     }
 
     /// `deleteAll`, tried `attempts` times. Returns nil when everything is gone, else the last error.

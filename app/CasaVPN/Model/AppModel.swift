@@ -401,7 +401,7 @@ final class AppModel {
     static func wipeNote(left: [String]) -> String {
         let what = left.isEmpty ? "some sign-in details" : left.joined(separator: ", ")
         return "Signed out, but the iPhone Keychain still holds \(what). The app tries to remove them again when it opens. "
-            + "If this stays, delete CasaVPN in the iOS Settings app and install it again."
+            + "Deleting the app does not remove them: iOS keeps Keychain items after an app is deleted."
     }
 
     func proposePairing(from text: String) -> String? {

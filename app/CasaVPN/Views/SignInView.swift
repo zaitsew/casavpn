@@ -42,6 +42,8 @@ struct SignInView: View {
                 }
             }
             .onAppear(perform: prefill)
+            // Swiping the sheet away would leave sign-in running; Cancel is the one way out.
+            .interactiveDismissDisabled(isReauth)
             .sheet(isPresented: $showHeaders) { HeadersEditor(headers: $headers) }
             .sheet(isPresented: $showScanner) { scannerSheet }
             .alert(

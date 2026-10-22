@@ -140,6 +140,30 @@ struct SignOutWipeTests {
     }
 }
 
+@Suite("Sign-out wipe of legacy items")
+struct LegacyWipeTests {
+    @Test func aLegacyItemThatCannotBeDeletedFailsTheWipe() throws {
+        let stubborn = StubbornKeySecretStore(key: "panelToken")
+        try stubborn.inner.write("old-token", for: "panelToken")
+        let store = SettingsStore(secrets: stubborn)
+        #expect(throws: KeychainError.self) { try store.deleteAll() }
+        #expect(store.deleteAllRetrying(attempts: 2) != nil)
+        #expect(store.storedItems().contains("the panel API token"))
+    }
+}
+
+/// A store that cannot delete one key.
+final class StubbornKeySecretStore: SecretStore, @unchecked Sendable {
+    let inner = InMemorySecretStore()
+    let key: String
+    init(key: String) { self.key = key }
+    func read(_ key: String) -> String? { inner.read(key) }
+    func write(_ value: String?, for key: String) throws {
+        if value == nil, key == self.key { throw KeychainError.status(-25308) }
+        try inner.write(value, for: key)
+    }
+}
+
 /// A store whose writes can be made to fail.
 final class FlakySecretStore: SecretStore, @unchecked Sendable {
     let inner = InMemorySecretStore()
