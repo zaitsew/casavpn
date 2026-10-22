@@ -145,7 +145,9 @@ struct SettingsView: View {
         } header: {
             Text("Alerts")
         } footer: {
-            Text("Critical alerts are delivered as time-sensitive notifications. Set up the relay first.")
+            Text(model.settings.hasRelay
+                 ? "Critical alerts are delivered as time-sensitive notifications."
+                 : "Set up the relay first. Critical alerts are delivered as time-sensitive notifications.")
         }
     }
 
