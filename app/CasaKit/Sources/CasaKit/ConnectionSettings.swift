@@ -2,7 +2,7 @@ import Foundation
 
 /// The five connection details of the app (docs/APP.md, "The app").
 /// All of them live in the Keychain, never in `UserDefaults`.
-public struct ConnectionSettings: Equatable, Sendable {
+public struct ConnectionSettings: Equatable, Codable, Sendable {
     /// `https://vpn.example.com:8443/<base path>`
     public var panelURL: String
     /// A 3x-ui API token (Settings -> API tokens in the panel).

@@ -20,6 +20,11 @@ public struct URLSessionTransport: HTTPTransport {
         self.session = URLSession(configuration: configuration)
     }
 
+    /// Cancels every request in flight and refuses new ones. Make a new transport afterwards.
+    public func cancelAll() {
+        session.invalidateAndCancel()
+    }
+
     public func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }

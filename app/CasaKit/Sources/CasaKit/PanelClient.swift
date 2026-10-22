@@ -13,6 +13,8 @@ public enum PanelError: Error, Equatable, LocalizedError {
     /// HTTP 200 with `"success": false`.
     case api(String)
     case decoding
+    /// The list was longer than the safety cap of pages.
+    case incompleteList
     case invalidRequest(String)
 
     public var errorDescription: String? {
@@ -24,6 +26,7 @@ public enum PanelError: Error, Equatable, LocalizedError {
         case .http(let status): "The panel answered HTTP \(status)."
         case .api(let message): message.isEmpty ? "The panel refused the request." : message
         case .decoding: "The panel answered something the app does not understand."
+        case .incompleteList: "The client list is too long to load completely."
         case .invalidRequest(let why): why
         }
     }
@@ -49,16 +52,24 @@ public enum PanelMessages {
 /// `Authorization: Bearer` (internal/web/controller/api.go, checkAPIAuth).
 public struct PanelClient: Sendable {
     public static let pageSize = 200
-    static let maxPages = 25
+    /// A safety cap, not a limit anyone should meet: 1,000 pages of 200 is 200,000 clients.
+    public static let defaultMaxPages = 1_000
 
     public let baseURL: URL
     private let token: String
     private let transport: any HTTPTransport
+    private let maxPages: Int
 
-    public init(baseURL: URL, token: String, transport: any HTTPTransport = URLSessionTransport()) {
+    public init(
+        baseURL: URL,
+        token: String,
+        transport: any HTTPTransport = URLSessionTransport(),
+        maxPages: Int = PanelClient.defaultMaxPages
+    ) {
         self.baseURL = baseURL
         self.token = token
         self.transport = transport
+        self.maxPages = maxPages
     }
 
     public func makeRequest(
@@ -126,7 +137,7 @@ public struct PanelClient: Sendable {
     public func clients() async throws -> ClientsSnapshot {
         var items: [VPNClient] = []
         var online: [String] = []
-        for page in 1...Self.maxPages {
+        for page in 1...max(1, maxPages) {
             let query = [
                 URLQueryItem(name: "page", value: String(page)),
                 URLQueryItem(name: "pageSize", value: String(Self.pageSize)),
@@ -134,9 +145,13 @@ public struct PanelClient: Sendable {
             let result = try await object(ClientPage.self, makeRequest(route: ["clients", "list", "paged"], query: query))
             items += result.items
             if page == 1 { online = result.summary.online }
-            if result.items.isEmpty || items.count >= result.total { break }
+            // The last page: the panel's own total is reached, or it has nothing more to give.
+            if result.items.isEmpty || items.count >= result.total {
+                return ClientsSnapshot(clients: items, online: Set(online))
+            }
         }
-        return ClientsSnapshot(clients: items, online: Set(online))
+        // Never hand back a silently partial list.
+        throw PanelError.incompleteList
     }
 
     /// Builds the body that turns a client on or off. See `ClientUpdateBody`.

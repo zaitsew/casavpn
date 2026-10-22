@@ -13,6 +13,7 @@ final class FakeTransport: HTTPTransport, @unchecked Sendable {
     private var sent: [URLRequest] = []
 
     init(_ replies: Reply...) { self.replies = replies }
+    init(_ replies: [Reply]) { self.replies = replies }
 
     var requests: [URLRequest] {
         lock.lock(); defer { lock.unlock() }

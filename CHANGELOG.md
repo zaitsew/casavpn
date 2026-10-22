@@ -7,7 +7,7 @@
 - `app/`: the CasaVPN iPhone app (SwiftUI, iOS 17+, XcodeGen). Status, Clients, Alerts and
   Settings tabs as in `docs/APP.md`; pairing by `casavpn://pair` link or QR code; push
   registration with the relay. `CasaKit`, a UI-free Swift package, holds the pairing link
-  parser, the Keychain store, the relay and 3x-ui panel clients and the formatting, with 60 unit
+  parser, the Keychain store, the relay and 3x-ui panel clients and the formatting, with 69 unit
   tests that run on macOS (`app/check.sh`). The panel client is written against the 3x-ui
   v3.10.2 source; turning a client on or off is not yet verified against a live panel.
 

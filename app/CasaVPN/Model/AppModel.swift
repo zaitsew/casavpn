@@ -68,9 +68,17 @@ final class AppModel {
     private let store: SettingsStore
     private let defaults: UserDefaults
     private var deviceToken: String?
-    private var relayFlight = false
-    private var statusFlight = false
-    private var clientsFlight = false
+    /// Bumped whenever the connection details change. A result that started under an older
+    /// epoch is dropped, so a slow answer from the old server never shows up under the new one.
+    private var epoch = 0
+    private var transport = URLSessionTransport()
+    private var relayFlight: Int?
+    private var statusFlight: Int?
+    private var clientsFlight: Int?
+    private var clientTickets = SnapshotSequencer()
+    /// Push changes run one after another, in the order they were asked for.
+    private var pushChain: Task<Void, Never>?
+    private var pushApplied: Bool
 
     private enum DefaultsKey {
         static let pushEnabled = "pushEnabled"
@@ -85,19 +93,21 @@ final class AppModel {
         self.store = store
         self.defaults = defaults
         self.settings = store.load()
-        self.pushEnabled = defaults.bool(forKey: DefaultsKey.pushEnabled)
+        let push = defaults.bool(forKey: DefaultsKey.pushEnabled)
+        self.pushEnabled = push
+        self.pushApplied = push
     }
 
     // MARK: Clients of the two servers
 
     private var relayClient: RelayClient? {
         guard settings.hasRelay, let base = settings.relayBase else { return nil }
-        return RelayClient(baseURL: base, token: settings.relayToken)
+        return RelayClient(baseURL: base, token: settings.relayToken, transport: transport)
     }
 
     private var panelClient: PanelClient? {
         guard settings.hasPanel, let base = settings.panelBase else { return nil }
-        return PanelClient(baseURL: base, token: settings.panelToken)
+        return PanelClient(baseURL: base, token: settings.panelToken, transport: transport)
     }
 
     // MARK: Launch
@@ -124,19 +134,24 @@ final class AppModel {
             monitor = nil; alerts = []; relayState = .notConfigured
             return
         }
-        guard !relayFlight else { return }
-        relayFlight = true
-        defer { relayFlight = false }
+        let gen = epoch
+        guard relayFlight != gen else { return }
+        relayFlight = gen
+        defer { if relayFlight == gen { relayFlight = nil } }
         if relayState != .loaded { relayState = .loading }
         do {
             let response = try await client.alerts(limit: 100)
+            guard gen == epoch else { return }
             alerts = response.alerts
             monitor = response.monitor
             relayState = .loaded
-        } catch let error as RelayError {
-            relayState = Self.state(for: error.kind)
         } catch {
-            relayState = .failed(error.localizedDescription)
+            guard gen == epoch else { return }
+            if let error = error as? RelayError {
+                relayState = Self.state(for: error.kind)
+            } else {
+                relayState = .failed(error.localizedDescription)
+            }
         }
     }
 
@@ -147,57 +162,79 @@ final class AppModel {
             serverStatus = nil; statusState = .notConfigured
             return
         }
-        guard !statusFlight else { return }
-        statusFlight = true
-        defer { statusFlight = false }
+        let gen = epoch
+        guard statusFlight != gen else { return }
+        statusFlight = gen
+        defer { if statusFlight == gen { statusFlight = nil } }
         if statusState != .loaded { statusState = .loading }
         do {
-            serverStatus = try await client.serverStatus()
+            let status = try await client.serverStatus()
+            guard gen == epoch else { return }
+            serverStatus = status
             statusState = .loaded
-        } catch let error as PanelError {
-            serverStatus = nil
-            statusState = Self.state(for: error.kind)
         } catch {
+            guard gen == epoch else { return }
             serverStatus = nil
-            statusState = .failed(error.localizedDescription)
+            if let error = error as? PanelError {
+                statusState = Self.state(for: error.kind)
+            } else {
+                statusState = .failed(error.localizedDescription)
+            }
         }
     }
 
-    func refreshClients() async {
+    /// `force` runs even when a refresh is already in flight (after a toggle: that refresh may
+    /// have started before the change). Answers are applied in the order the requests started.
+    func refreshClients(force: Bool = false) async {
         guard let client = panelClient else {
             clients = []; onlineEmails = []; clientsState = .notConfigured
             return
         }
-        guard !clientsFlight else { return }
-        clientsFlight = true
-        defer { clientsFlight = false }
+        let gen = epoch
+        if !force, clientsFlight == gen { return }
+        clientsFlight = gen
+        let ticket = clientTickets.begin()
+        defer { if clientsFlight == gen, !force { clientsFlight = nil } }
         if clientsState != .loaded { clientsState = .loading }
         do {
             let snapshot = try await client.clients()
-            clients = snapshot.clients
+            guard gen == epoch, clientTickets.accept(ticket) else { return }
+            var fresh = snapshot.clients
+            // A switch that is being changed right now keeps what the user just chose.
+            for index in fresh.indices where busyClients.contains(fresh[index].email) {
+                if let local = clients.first(where: { $0.email == fresh[index].email }) { fresh[index].enable = local.enable }
+            }
+            clients = fresh
             onlineEmails = snapshot.online
             clientsState = .loaded
-        } catch let error as PanelError {
-            clients = []; onlineEmails = []
-            clientsState = Self.state(for: error.kind)
         } catch {
+            guard gen == epoch, clientTickets.accept(ticket) else { return }
             clients = []; onlineEmails = []
-            clientsState = .failed(error.localizedDescription)
+            if let error = error as? PanelError {
+                clientsState = Self.state(for: error.kind)
+            } else {
+                clientsState = .failed(error.localizedDescription)
+            }
         }
     }
 
     func isOnline(_ client: VPNClient) -> Bool { onlineEmails.contains(client.email) }
 
     /// Turns a client on or off. The switch moves at once and moves back if the panel refuses.
+    /// A change of connection details while it runs cancels it, and its result is dropped.
     func setClient(_ client: VPNClient, enabled: Bool) async {
         guard let panel = panelClient, !busyClients.contains(client.email) else { return }
+        let gen = epoch
         busyClients.insert(client.email)
         replace(email: client.email) { $0.enable = enabled }
-        defer { busyClients.remove(client.email) }
+        defer { if gen == epoch { busyClients.remove(client.email) } }
         do {
             try await panel.setClientEnabled(email: client.email, enabled: enabled)
-            await refreshClients()
+            guard gen == epoch else { return }
+            // Always read the list again, even if a refresh is running: that one may predate the change.
+            await refreshClients(force: true)
         } catch {
+            guard gen == epoch else { return }
             replace(email: client.email) { $0.enable = !enabled }
             clientError = "Could not \(enabled ? "turn on" : "turn off") \(client.email). \(error.localizedDescription)"
         }
@@ -240,16 +277,31 @@ final class AppModel {
             saveError = error.localizedDescription
             return
         }
+        guard normalized != old else { return }
         settings = normalized
-        Task {
-            let relayChanged = old.relayURL != normalized.relayURL || old.relayToken != normalized.relayToken
-            if relayChanged, pushEnabled, let token = deviceToken, old.hasRelay, let base = old.relayBase {
-                // Best effort: the old relay should stop pushing to this phone.
-                try? await RelayClient(baseURL: base, token: old.relayToken).deleteDevice(token: token)
+
+        // New epoch: cancel everything in flight and forget the old server's data.
+        epoch += 1
+        transport.cancelAll()
+        transport = URLSessionTransport()
+        relayFlight = nil; statusFlight = nil; clientsFlight = nil
+        busyClients = []
+        clients = []; onlineEmails = []; serverStatus = nil; alerts = []; monitor = nil
+        relayState = .idle; statusState = .idle; clientsState = .idle
+
+        let relayChanged = old.relayURL != normalized.relayURL || old.relayToken != normalized.relayToken
+        if relayChanged {
+            enqueuePush {
+                if self.pushApplied, let token = self.deviceToken, old.hasRelay, let base = old.relayBase {
+                    // Best effort: the old relay should stop pushing to this phone.
+                    try? await RelayClient(baseURL: base, token: old.relayToken).deleteDevice(token: token)
+                }
+                self.clearRegistrationRecord()
             }
-            if relayChanged { clearRegistrationRecord() }
+        }
+        Task {
             await refreshAll()
-            if pushEnabled { await syncRegistration() }
+            await syncRegistration()
         }
     }
 
@@ -285,23 +337,46 @@ final class AppModel {
         pushAuthorization = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
+    /// The switch in Settings. The wish is recorded at once; the work runs in a queue, and the
+    /// last wish wins (Off then On quickly cannot leave the old Off to unregister afterwards).
     func setPushEnabled(_ on: Bool) async {
         pushMessage = nil
-        if on {
+        pushEnabled = on
+        defaults.set(on, forKey: DefaultsKey.pushEnabled)
+        await enqueuePush { await self.applyPush() }.value
+    }
+
+    @discardableResult
+    private func enqueuePush(_ work: @escaping @MainActor () async -> Void) -> Task<Void, Never> {
+        let previous = pushChain
+        let task = Task { @MainActor in
+            await previous?.value
+            await work()
+        }
+        pushChain = task
+        return task
+    }
+
+    /// Brings the real push state in line with `pushEnabled`. Runs only inside the queue.
+    private func applyPush() async {
+        let wanted = pushEnabled
+        guard wanted != pushApplied else { return }
+        if wanted {
             // Time-sensitive delivery comes from the entitlement; the `.timeSensitive` option is deprecated.
             let center = UNUserNotificationCenter.current()
             let granted = (try? await center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
             await refreshPushAuthorization()
             guard granted else {
-                setPushFlag(false)
+                pushEnabled = false
+                defaults.set(false, forKey: DefaultsKey.pushEnabled)
                 pushMessage = "Notifications are turned off for CasaVPN. Allow them in the iOS Settings app."
                 return
             }
-            setPushFlag(true)
+            pushApplied = true
             UIApplication.shared.registerForRemoteNotifications()
-            await syncRegistration()
+            await performRegistration()
         } else {
-            setPushFlag(false)
+            pushApplied = false
             if let token = deviceToken, let client = relayClient {
                 do { try await client.deleteDevice(token: token) } catch {
                     pushMessage = "Push is off on this iPhone, but the relay could not be told: \(error.localizedDescription)"
@@ -321,10 +396,14 @@ final class AppModel {
         pushMessage = "This iPhone could not register for push: \(error.localizedDescription)"
     }
 
-    /// Tells the relay about this device. Repeats only when the token, the relay or the name changed,
-    /// or after a week.
     func syncRegistration() async {
-        guard pushEnabled, let token = deviceToken, let client = relayClient else { return }
+        await enqueuePush { await self.performRegistration() }.value
+    }
+
+    /// Tells the relay about this device. Repeats only when the token, the relay or the name changed,
+    /// or after a week. Runs only inside the queue.
+    private func performRegistration() async {
+        guard pushEnabled, pushApplied, let token = deviceToken, let client = relayClient else { return }
         let registration = DeviceRegistration(token: token, environment: .current, name: UIDevice.current.name)
         let fingerprint = Self.fingerprint(registration: registration, settings: settings)
         let age = defaults.object(forKey: DefaultsKey.registeredAt) as? Date
@@ -332,12 +411,15 @@ final class AppModel {
            let age, Date().timeIntervalSince(age) < Self.registrationMaxAge {
             return
         }
+        let gen = epoch
         do {
             try await client.registerDevice(registration)
+            guard gen == epoch else { return }
             defaults.set(fingerprint, forKey: DefaultsKey.registrationFingerprint)
             defaults.set(Date(), forKey: DefaultsKey.registeredAt)
             pushMessage = nil
         } catch {
+            guard gen == epoch else { return }
             pushMessage = "This iPhone could not be registered with the relay: \(error.localizedDescription)"
         }
     }
@@ -362,11 +444,6 @@ final class AppModel {
     }
 
     // MARK: Helpers
-
-    private func setPushFlag(_ on: Bool) {
-        pushEnabled = on
-        defaults.set(on, forKey: DefaultsKey.pushEnabled)
-    }
 
     private func clearRegistrationRecord() {
         defaults.removeObject(forKey: DefaultsKey.registrationFingerprint)

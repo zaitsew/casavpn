@@ -127,6 +127,30 @@ struct PanelClientTests {
         #expect(transport.requests.map { $0.url?.query } == ["page=1&pageSize=200", "page=2&pageSize=200"])
     }
 
+    @Test func readsMoreThanTwentyFivePages() async throws {
+        let total = 40
+        let replies = (1...total).map { n in
+            FakeTransport.Reply.response(status: 200, body: #"{"success": true, "obj": {"items": [{"email": "c\#(n)", "subId": "s", "enable": true}], "total": \#(total), "summary": {"online": []}}}"#)
+        }
+        let transport = FakeTransport(replies)
+        let snapshot = try await client(transport).clients()
+        #expect(snapshot.clients.count == total)
+        #expect(transport.requests.count == total)
+    }
+
+    @Test func hittingTheSafetyCapIsAnErrorNotAPartialList() async {
+        let replies = (1...5).map { n in
+            FakeTransport.Reply.response(status: 200, body: #"{"success": true, "obj": {"items": [{"email": "c\#(n)"}], "total": 100, "summary": {}}}"#)
+        }
+        let capped = PanelClient(baseURL: panelURL, token: "t", transport: FakeTransport(replies), maxPages: 3)
+        do {
+            _ = try await capped.clients()
+            Issue.record("expected an error")
+        } catch {
+            #expect(error as? PanelError == .incompleteList)
+        }
+    }
+
     @Test func nullListsFromGoDecodeAsEmpty() async throws {
         let body = #"{"success": true, "obj": {"items": null, "total": 0, "summary": {"online": null}}}"#
         let snapshot = try await client(FakeTransport(.response(status: 200, body: body))).clients()

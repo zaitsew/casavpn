@@ -82,15 +82,115 @@ struct SettingsTests {
         #expect(ConnectionSettings(panelURL: "https://vpn.example.com", panelToken: "t").hasPanel)
     }
 
-    @Test func storeRoundTripsThroughFiveSeparateItems() throws {
+    @Test func storeKeepsTheWholeSetInOneItem() throws {
         let memory = InMemorySecretStore()
         let store = SettingsStore(secrets: memory)
         let settings = ConnectionSettings(panelURL: "https://vpn.example.com/p", panelToken: "a", relayURL: "https://r.example.com", relayToken: "b", subURL: "https://vpn.example.com/sub/")
         try store.save(settings)
         #expect(store.load() == settings)
-        #expect(memory.keys == ["panelToken", "panelURL", "relayToken", "relayURL", "subURL"])
+        #expect(memory.keys == ["connection"])
         try store.save(.empty)
         #expect(store.load() == .empty)
         #expect(memory.keys.isEmpty)
+    }
+}
+
+/// A store whose writes can be made to fail.
+final class FlakySecretStore: SecretStore, @unchecked Sendable {
+    let inner = InMemorySecretStore()
+    private let lock = NSLock()
+    private var failing = false
+    var failWrites: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return failing }
+        set { lock.lock(); defer { lock.unlock() }; failing = newValue }
+    }
+    func read(_ key: String) -> String? { inner.read(key) }
+    func write(_ value: String?, for key: String) throws {
+        if failWrites { throw KeychainError.status(-25308) }
+        try inner.write(value, for: key)
+    }
+}
+
+@Suite("SettingsStore atomicity")
+struct SettingsAtomicityTests {
+    let first = ConnectionSettings(panelURL: "https://a.example.com/p", panelToken: "tokA", relayURL: "https://ra.example.com", relayToken: "rA", subURL: "https://a.example.com/sub/")
+    let second = ConnectionSettings(panelURL: "https://b.example.com/p", panelToken: "tokB", relayURL: "https://rb.example.com", relayToken: "rB", subURL: "https://b.example.com/sub/")
+
+    @Test func aFailedSaveLeavesThePreviousCompleteSet() throws {
+        let flaky = FlakySecretStore()
+        let store = SettingsStore(secrets: flaky)
+        try store.save(first)
+        flaky.failWrites = true
+        #expect(throws: KeychainError.self) { try store.save(second) }
+        flaky.failWrites = false
+        // Never the new URL with the old token.
+        #expect(store.load() == first)
+    }
+
+    @Test func aSaveIsOneWrite() throws {
+        let flaky = FlakySecretStore()
+        try SettingsStore(secrets: flaky).save(second)
+        #expect(flaky.inner.keys == ["connection"])
+    }
+
+    @Test func legacyItemsAreMigratedThenDeleted() throws {
+        let memory = InMemorySecretStore()
+        try memory.write(first.panelURL, for: "panelURL")
+        try memory.write(first.panelToken, for: "panelToken")
+        try memory.write(first.relayURL, for: "relayURL")
+        try memory.write(first.relayToken, for: "relayToken")
+        try memory.write(first.subURL, for: "subURL")
+        let store = SettingsStore(secrets: memory)
+        #expect(store.load() == first)
+        #expect(memory.keys == ["connection"])
+        #expect(store.load() == first)
+    }
+
+    @Test func aFailedMigrationKeepsTheLegacyItems() throws {
+        let flaky = FlakySecretStore()
+        try flaky.inner.write(first.panelURL, for: "panelURL")
+        try flaky.inner.write(first.panelToken, for: "panelToken")
+        try flaky.inner.write(first.relayURL, for: "relayURL")
+        try flaky.inner.write(first.relayToken, for: "relayToken")
+        flaky.failWrites = true
+        let store = SettingsStore(secrets: flaky)
+        #expect(store.load().panelToken == "tokA")
+        #expect(flaky.inner.keys == ["panelToken", "panelURL", "relayToken", "relayURL"])
+        flaky.failWrites = false
+        #expect(store.load().relayToken == "rA")
+        #expect(flaky.inner.keys == ["connection"])
+    }
+
+    @Test func aCorruptItemReadsAsEmpty() throws {
+        let memory = InMemorySecretStore()
+        try memory.write("not json", for: "connection")
+        #expect(SettingsStore(secrets: memory).load() == .empty)
+    }
+}
+
+@Suite("SnapshotSequencer")
+struct SequencerTests {
+    @Test func anOlderAnswerNeverReplacesANewerOne() {
+        var s = SnapshotSequencer()
+        let a = s.begin()
+        let b = s.begin()
+        let acceptedB = s.accept(b)
+        let acceptedA = s.accept(a)
+        let c = s.begin()
+        let acceptedC = s.accept(c)
+        #expect(acceptedB)
+        #expect(!acceptedA)
+        #expect(acceptedC)
+    }
+
+    @Test func answersInOrderAreAllAccepted() {
+        var s = SnapshotSequencer()
+        let a = s.begin()
+        let acceptedA = s.accept(a)
+        let b = s.begin()
+        let acceptedB = s.accept(b)
+        let again = s.accept(b)
+        #expect(acceptedA && acceptedB)
+        #expect(!again)
     }
 }
