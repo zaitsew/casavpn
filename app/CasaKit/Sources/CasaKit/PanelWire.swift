@@ -33,6 +33,8 @@ enum PanelWire {
         switch status {
         case 200..<300:
             return html ? .refusedByProxy(status) : nil
+        case 300..<400:
+            return .redirected(status)
         case 401:
             return html ? .refusedByProxy(status) : .unauthorized
         case 403:

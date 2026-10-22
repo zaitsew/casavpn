@@ -15,6 +15,8 @@ public enum PanelError: Error, Equatable, LocalizedError {
     /// 404 without a web page: usually a wrong base path in the panel URL.
     case notFound
     case http(Int)
+    /// The panel answered with a redirect the app did not follow (to another server, or a loop).
+    case redirected(Int)
     /// HTTP 200 with `"success": false`.
     case api(String)
     case decoding
@@ -33,6 +35,7 @@ public enum PanelError: Error, Equatable, LocalizedError {
         case .forbidden(let message): PanelMessages.forbidden(message)
         case .notFound: "The panel did not find this address. Check the base path in the panel URL."
         case .http(let status): "The panel answered HTTP \(status)."
+        case .redirected: "The panel address redirects to another server. The app does not follow that, so your password stays with the address you typed. Enter the panel's final address."
         case .api(let message): message.isEmpty ? "The panel refused the request." : message
         case .decoding: "The panel answered something the app does not understand."
         case .incompleteList: "The client list is too long to load completely."

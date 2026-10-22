@@ -17,7 +17,7 @@ public struct URLSessionTransport: HTTPTransport {
         configuration.waitsForConnectivity = false
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
-        self.session = URLSession(configuration: configuration)
+        self.session = URLSession(configuration: configuration, delegate: RedirectGuard(), delegateQueue: nil)
     }
 
     /// Cancels every request in flight and refuses new ones. Make a new transport afterwards.
@@ -29,6 +29,31 @@ public struct URLSessionTransport: HTTPTransport {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
         return (data, http)
+    }
+}
+
+/// The app follows a redirect only inside one origin (same scheme, host and port). A 307 or 308 keeps
+/// the method and the body, so following one to another server would send it the password, the 2FA
+/// code or a token. A refused redirect comes back as the 3xx response itself.
+public enum RedirectPolicy {
+    public static func allows(from: URL?, to: URL?) -> Bool {
+        guard let from, let to, let a = origin(from), let b = origin(to) else { return false }
+        return a == b
+    }
+
+    private static func origin(_ url: URL) -> String? {
+        guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased(), !host.isEmpty else { return nil }
+        let port = url.port ?? (scheme == "https" ? 443 : scheme == "http" ? 80 : 0)
+        return "\(scheme)://\(host):\(port)"
+    }
+}
+
+final class RedirectGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(RedirectPolicy.allows(from: task.originalRequest?.url ?? response.url, to: request.url) ? request : nil)
     }
 }
 
