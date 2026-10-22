@@ -95,7 +95,10 @@ struct PanelClientTests {
     @Test func clientsRequestAsksForTheBiggestPage() async throws {
         let transport = FakeTransport(.response(status: 200, body: Sample.clients))
         _ = try await client(transport).clients()
-        #expect(transport.requests.count == 1)
+        // The list, then the live "online" answer.
+        #expect(transport.requests.count == 2)
+        #expect(transport.requests[1].url?.path == "/secret-path/panel/api/clients/onlines")
+        #expect(transport.requests[1].httpMethod == "POST")
         #expect(transport.requests[0].url?.path == "/secret-path/panel/api/clients/list/paged")
         #expect(transport.requests[0].url?.query == "page=1&pageSize=200")
     }
@@ -124,7 +127,7 @@ struct PanelClientTests {
         let transport = FakeTransport(.response(status: 200, body: page(["a", "b"], total: 3)), .response(status: 200, body: page(["c"], total: 3)))
         let snapshot = try await client(transport).clients()
         #expect(snapshot.clients.map(\.email) == ["a", "b", "c"])
-        #expect(transport.requests.map { $0.url?.query } == ["page=1&pageSize=200", "page=2&pageSize=200"])
+        #expect(transport.requests.prefix(2).map { $0.url?.query } == ["page=1&pageSize=200", "page=2&pageSize=200"])
     }
 
     @Test func readsMoreThanTwentyFivePages() async throws {
@@ -135,7 +138,7 @@ struct PanelClientTests {
         let transport = FakeTransport(replies)
         let snapshot = try await client(transport).clients()
         #expect(snapshot.clients.count == total)
-        #expect(transport.requests.count == total)
+        #expect(transport.requests.count == total + 1)
     }
 
     @Test func hittingTheSafetyCapIsAnErrorNotAPartialList() async {
@@ -165,7 +168,7 @@ struct PanelClientTests {
             Issue.record("expected an error")
         } catch {
             #expect(error as? PanelError == .forbidden("this API token is not permitted to access this endpoint"))
-            #expect((error as? PanelError)?.errorDescription == PanelMessages.cannotListClients)
+            #expect((error as? PanelError)?.errorDescription == PanelMessages.forbidden("this API token is not permitted to access this endpoint"))
         }
     }
 
@@ -179,7 +182,7 @@ struct PanelClientTests {
     }
 
     @Test func aClosedPanelIsUnreachableWithTheContractSentence() async {
-        for code in [URLError.Code.timedOut, .cannotConnectToHost, .notConnectedToInternet, .secureConnectionFailed] {
+        for code in [URLError.Code.timedOut, .cannotConnectToHost, .notConnectedToInternet, .cannotFindHost] {
             do {
                 _ = try await client(FakeTransport(.failure(code))).serverStatus()
                 Issue.record("expected an error")

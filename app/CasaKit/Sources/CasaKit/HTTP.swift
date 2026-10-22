@@ -34,11 +34,16 @@ public struct URLSessionTransport: HTTPTransport {
 
 /// How a failure should be presented, shared by the relay and the panel errors.
 public enum FailureKind: Equatable, Sendable {
-    /// The server could not be reached (timeout, no route, DNS, TLS).
+    /// The server could not be reached (timeout, no route, DNS).
     case unreachable
-    /// 401: the token is wrong, revoked or disabled.
+    /// The TLS handshake failed (bad, expired or mismatched certificate).
+    case tls
+    /// A proxy in front of the panel answered with a web page (403, 404, a login wall):
+    /// the network is refused, the token is not at fault.
+    case refused
+    /// 401: the token or the session is wrong, revoked, disabled or expired.
     case unauthorized
-    /// 403: the token is valid but its scope does not allow the request.
+    /// 403 from the panel itself: the token is valid but its scope does not allow the request.
     case forbidden(String)
     case other(String)
 }

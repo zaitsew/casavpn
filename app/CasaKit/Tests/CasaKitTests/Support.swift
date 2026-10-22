@@ -5,6 +5,7 @@ import Foundation
 final class FakeTransport: HTTPTransport, @unchecked Sendable {
     enum Reply {
         case response(status: Int, body: String)
+        case full(status: Int, body: String, headers: [String: String])
         case failure(URLError.Code)
     }
 
@@ -32,6 +33,9 @@ final class FakeTransport: HTTPTransport, @unchecked Sendable {
         case .response(let status, let body):
             let http = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil)!
             return (Data(body.utf8), http)
+        case .full(let status, let body, let headers):
+            let http = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers)!
+            return (Data(body.utf8), http)
         }
     }
 }
@@ -42,3 +46,18 @@ extension URLRequest {
 
 let relayURL = URL(string: "https://casavpn-monitor.example.workers.dev")!
 let panelURL = URL(string: "https://vpn.example.com:8443/secret-path")!
+
+extension FakeTransport.Reply {
+    static func ok(_ obj: String = "null", msg: String = "") -> FakeTransport.Reply {
+        .response(status: 200, body: #"{"success": true, "msg": "\#(msg)", "obj": \#(obj)}"#)
+    }
+
+    static func refused(_ msg: String) -> FakeTransport.Reply {
+        .response(status: 200, body: #"{"success": false, "msg": "\#(msg)", "obj": null}"#)
+    }
+}
+
+extension URLRequest {
+    var path: String { url?.path ?? "" }
+    var jsonBody: [String: Any] { ((try? JSONSerialization.jsonObject(with: httpBody ?? Data())) as? [String: Any]) ?? [:] }
+}
