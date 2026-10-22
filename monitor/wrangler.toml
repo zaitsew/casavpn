@@ -1,4 +1,4 @@
-# External uptime monitor for vpn.example.com:443. Deploy steps: README.md.
+# External uptime monitor and alert relay for vpn.example.com:443. Deploy steps: README.md.
 #
 # No account id is committed: `wrangler login` selects the account. The KV id
 # below is a placeholder; paste the id printed by
@@ -9,8 +9,9 @@ name = "casavpn-monitor"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
 
-# Cron only: no public URL.
-workers_dev = false
+# The relay API (docs/APP.md) needs a public URL: https://casavpn-monitor.<subdomain>.workers.dev.
+# Every route needs a bearer token, so the URL alone gives nothing away.
+workers_dev = true
 preview_urls = false
 
 [triggers]
@@ -25,4 +26,12 @@ TARGET_PORT = "443"
 binding = "STATE"
 id = "REPLACE_WITH_KV_NAMESPACE_ID"
 
-# Secret (not here): NTFY_URL, set with `npx wrangler secret put NTFY_URL`.
+# Secrets (not here), set with `npx wrangler secret put <NAME>`:
+#   APP_TOKEN      bearer token of the iPhone app            (openssl rand -hex 32)
+#   HOST_TOKEN     bearer token of the host scripts          (openssl rand -hex 32)
+#   APNS_KEY_P8    the text of the APNs auth key, AuthKey_<KEYID>.p8
+#   APNS_KEY_ID    that key's 10-character id
+#   APNS_TEAM_ID   your Apple developer team id
+#   APNS_TOPIC     the app's bundle id
+#   NTFY_URL       optional: also post the monitor's alerts to this ntfy topic URL
+# Without the APNS_* secrets the Worker keeps the alert history and pushes nothing.

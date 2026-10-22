@@ -2,7 +2,7 @@
   "name": "casavpn-monitor",
   "version": "1.0.0",
   "private": true,
-  "description": "External uptime monitor for vpn.example.com:443 (Cloudflare Worker, cron every 5 minutes, alerts via ntfy)",
+  "description": "External uptime monitor and alert relay for vpn.example.com:443 (Cloudflare Worker, cron every 5 minutes, push alerts through APNs)",
   "type": "module",
   "engines": { "node": ">=22.18" },
   "scripts": {

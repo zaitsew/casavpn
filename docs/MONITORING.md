@@ -18,11 +18,12 @@ Two free options; pick one.
 ### Option A: the bundled Cloudflare Worker
 
 [`monitor/`](../monitor) checks DNS and the VPN port from Cloudflare's network
-every 5 minutes and pushes to ntfy **only on a state change** (down after two
-failures in a row, recovered when the port answers). The alert says where DNS
+every 5 minutes and alerts **only on a state change** (down after two failures in a
+row, recovered when the port answers). The alert goes to the CasaVPN iPhone app as a
+push notification ([APP.md](APP.md)) and into the alert history. It says where DNS
 points, so "stale IP" and "the Pi is off" are told apart at a glance. Setup is in
-[monitor/README.md](../monitor/README.md). It needs a free Cloudflare account and
-an ntfy topic.
+[monitor/README.md](../monitor/README.md). It needs a free Cloudflare account and an
+Apple developer account for the push key. ntfy is an optional extra channel.
 
 ### Option B: a hosted service
 
@@ -35,10 +36,16 @@ nginx and the certificate (enable SSL-expiry alerts at 14 days).
 
 Either way, send the alerts to a channel you actually read on your phone.
 
-## 2. ntfy push alerts
+## 2. Push alerts
 
-[ntfy.sh](https://ntfy.sh) needs no account. The topic name is the only secret, so
-make it unguessable:
+The Worker in option A is also the **alert relay**: it keeps the alert history and
+sends pushes to the app through APNs. The host scripts post their alerts to it
+(`CASAVPN_RELAY_URL`, `CASAVPN_RELAY_TOKEN` in `casavpn.env`); the full list of
+alerts and the API are in [APP.md](APP.md).
+
+[ntfy.sh](https://ntfy.sh) stays as an optional second channel for the host scripts
+and for the Worker. It needs no account. The topic name is the only secret, so make
+it unguessable:
 
 ```bash
 echo "https://ntfy.sh/casavpn-$(openssl rand -hex 8)"
@@ -46,7 +53,9 @@ echo "https://ntfy.sh/casavpn-$(openssl rand -hex 8)"
 
 Subscribe to that topic in the ntfy app, then put the URL in `NTFY_URL` (the host's
 `casavpn.env`, `monitor/wrangler.toml` as a secret, `CASAVPN_PULL_NTFY_URL` on your
-laptop). Test it: `curl -d "hello" "$NTFY_URL"`.
+laptop). Test it: `curl -d "hello" "$NTFY_URL"`. **ntfy.sh answers `522` to requests
+from Cloudflare Workers**, so the Worker cannot post to it; use a self-hosted ntfy
+server there, or leave `NTFY_URL` unset and rely on the app's push.
 
 What pushes from where:
 
@@ -54,7 +63,7 @@ What pushes from where:
 |---|---|
 | `casavpn-ddns` (host) | the IP changed and was repaired, three runs in a row failed, the IP is not public, duplicate records ([DYNAMIC-IP.md](DYNAMIC-IP.md)) |
 | `pull-backups.sh` (laptop) | no fresh backup for 48 h, or no pull for 7 days |
-| the Worker (Cloudflare) | the VPN port stops answering / recovers |
+| the Worker (Cloudflare) | the VPN port stops answering / recovers (the app's push; ntfy only if `NTFY_URL` is set on the Worker) |
 
 ## 3. The healthcheck
 

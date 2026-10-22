@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added
+
+- The `monitor/` Worker is now also the alert relay of [docs/APP.md](docs/APP.md). Its own
+  transitions are alerts (`vpn.down` critical, `vpn.recovered` info): recorded once in a
+  history in KV (one key per alert, 30 days) and pushed to the iPhone app through APNs (ES256 JWT signed with
+  WebCrypto, cached 50 minutes). A new HTTPS API serves `POST`/`DELETE /v1/devices`,
+  `GET /v1/alerts`, `POST /v1/events` (6-hour dedupe) and `POST /v1/test`, behind two
+  bearer tokens (`APP_TOKEN`, `HOST_TOKEN`) compared in constant time.
+
+### Changed
+
+- The Worker has a public URL now (`workers_dev = true`; every route needs a token).
+  ntfy is optional (`NTFY_URL`) and a failure is logged instead of thrown; the monitor
+  state also records `lastCheck` and `target`, written every run (288 KV writes a day).
+  `monitor/README.md` and `docs/MONITORING.md` describe the relay setup and note that
+  ntfy.sh answers 522 to Workers.
+
 ### Fixed
 
 - `./check.sh` run by the pre-push hook from a linked worktree no longer lets the
