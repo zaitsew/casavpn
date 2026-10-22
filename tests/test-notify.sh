@@ -127,6 +127,11 @@ run casavpn_notify_ntfy a.b critical $'t\nitle' b k2; has "critical is urgent" '
 has "newlines are removed from the title header" '^arg: Title: title$' "$FAKE/calls"
 touch "$FAKE/ntfy_fail"; run casavpn_notify_ntfy a.b info t b 'fails'; rc_is "a failed ntfy push fails" 1
 rm "$FAKE/ntfy_fail"; run casavpn_notify_ntfy a.b info t b 'fails'; rc_is "  ...and is retried, because the failure left no state" 0
+NTFY_URL='https://[2001:db8::1]:8080/casavpn-EXAMPLE' run casavpn_notify_ntfy a.b info t b
+rc_is "an IPv6 host in brackets is sent" 0
+has "  ...with URL globbing off" '^arg: -fsSg$' "$FAKE/calls"
+n=$(calls); NTFY_URL='https://ntfy.example.com/a"b' run casavpn_notify_ntfy a.b info t b
+rc_is "a URL with a quote is refused" 1; eq "  ...and curl is not started" "$(calls)" "$n"
 unset NTFY_URL; run casavpn_notify_ntfy a.b info t b; rc_is "no NTFY_URL: not configured (3)" 3
 
 echo "both channels"
