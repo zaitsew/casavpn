@@ -341,7 +341,7 @@ step_packages() {
 step_files() {
   step "Our scripts and helpers"
   local f
-  for f in casavpn-ddns casavpn-backup casavpn-minver casavpn-alerts; do
+  for f in casavpn-ddns casavpn-backup casavpn-minver casavpn-alerts casavpn-pair; do
     install_file 0755 "$HERE/scripts/$f" "$BIN_DIR/$f"
   done
   install_file 0755 "$HERE/scripts/healthcheck.sh" "$BIN_DIR/casavpn-healthcheck"
