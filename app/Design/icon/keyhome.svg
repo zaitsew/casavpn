@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2E0B4F"/>
+      <stop offset="0.55" stop-color="#6E1760"/>
+      <stop offset="1" stop-color="#C23B55"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="512" cy="560" r="600" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FF9A4A" stop-opacity="0.9"/>
+      <stop offset="0.4" stop-color="#FF6A4A" stop-opacity="0.4"/>
+      <stop offset="1" stop-color="#FF5A5F" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#FFF1B8"/>
+      <stop offset="0.28" stop-color="#FFD15A"/>
+      <stop offset="0.7" stop-color="#F2A22C"/>
+      <stop offset="1" stop-color="#D07A16"/>
+    </linearGradient>
+    <linearGradient id="goldInner" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#E9902A"/>
+      <stop offset="0.5" stop-color="#F6B13F"/>
+      <stop offset="1" stop-color="#FFD978"/>
+    </linearGradient>
+    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#B15A0C"/>
+      <stop offset="1" stop-color="#6C2C04"/>
+    </linearGradient>
+    <radialGradient id="light" cx="512" cy="540" r="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.45" stop-color="#FFE9A8"/>
+      <stop offset="1" stop-color="#FF8A3D"/>
+    </radialGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFE9A8" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#FFB05A" stop-opacity="0"/>
+    </linearGradient>
+    <path id="plate" d="M512 112 L862 414 V850 H162 V414 Z"/>
+    <path id="inner" d="M512 214 L772 440 V780 H252 V440 Z"/>
+    <path id="hole" d="M512 400 A118 118 0 0 1 568 622 L600 760 H424 L456 622 A118 118 0 0 1 512 400 Z"/>
+    <clipPath id="plateClip"><use href="#plate"/></clipPath>
+    <clipPath id="innerClip"><use href="#inner"/></clipPath>
+    <filter id="soft" filterUnits="userSpaceOnUse" x="-300" y="-300" width="1624" height="1624"><feGaussianBlur stdDeviation="10"/></filter>
+    <filter id="soft3" filterUnits="userSpaceOnUse" x="-300" y="-300" width="1624" height="1624"><feGaussianBlur stdDeviation="3"/></filter>
+    <filter id="shadow" filterUnits="userSpaceOnUse" x="-300" y="-300" width="1624" height="1624"><feGaussianBlur stdDeviation="26"/></filter>
+      <radialGradient id="headGlow" cx="512" cy="520" r="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.3" stop-color="#FFE9A8"/>
+      <stop offset="0.5" stop-color="#FF9A3D"/>
+      <stop offset="0.8" stop-color="#C2415A" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#2B0A3A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="slotGlow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFB05A" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#C2415A" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#glow)"/>
+
+  <!-- cast shadow -->
+  <use href="#plate" transform="translate(14 42)" fill="#25043C" opacity="0.6" stroke="#25043C" stroke-width="44" stroke-linejoin="round" filter="url(#shadow)"/>
+
+  <!-- plate: extrusion, then face (rounded corners via round-joined stroke) -->
+  <use href="#plate" transform="translate(0 22)" fill="url(#edge)" stroke="url(#edge)" stroke-width="44" stroke-linejoin="round"/>
+  <use href="#plate" transform="translate(0 11)" fill="#D98A1E" stroke="#D98A1E" stroke-width="44" stroke-linejoin="round"/>
+  <use href="#plate" fill="url(#gold)" stroke="url(#gold)" stroke-width="44" stroke-linejoin="round"/>
+  <!-- crisp rim light on the top-left edges -->
+  <use href="#plate" fill="none" stroke="#FFFBE6" stroke-opacity="0.9" stroke-width="5" stroke-linejoin="round" transform="translate(0 -20)" clip-path="url(#plateClip)" opacity="0"/>
+
+  <!-- embossed inner panel -->
+  <use href="#inner" transform="translate(0 6)" fill="#FFE9A8" stroke="#FFE9A8" stroke-width="30" stroke-linejoin="round" opacity="0.85"/>
+  <use href="#inner" fill="url(#goldInner)" stroke="url(#goldInner)" stroke-width="30" stroke-linejoin="round"/>
+  <g clip-path="url(#innerClip)">
+    <use href="#inner" fill="none" stroke="#7A3406" stroke-opacity="0.6" stroke-width="36" stroke-linejoin="round" filter="url(#soft)" transform="translate(6 10)"/>
+  </g>
+
+  <!-- keyhole: a dark opening with a lit room behind it -->
+  <use href="#hole" fill="none" stroke="#FFF1C2" stroke-width="10" stroke-linejoin="round" transform="translate(0 7)"/>
+  <use href="#hole" fill="#2B0A3A"/>
+  <clipPath id="holeClip"><use href="#hole"/></clipPath>
+  <g clip-path="url(#holeClip)">
+    <circle cx="512" cy="520" r="150" fill="url(#headGlow)"/>
+    <path d="M470 600 H554 L590 770 H434 Z" fill="url(#slotGlow)"/>
+    <use href="#hole" fill="none" stroke="#12031F" stroke-opacity="0.7" stroke-width="26" filter="url(#soft)"/>
+  </g>
+  <circle cx="512" cy="512" r="46" fill="#FFFFFF" opacity="0.95" filter="url(#soft3)"/>
+</svg>

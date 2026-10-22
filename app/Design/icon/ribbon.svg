@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#141F4A"/>
+      <stop offset="1" stop-color="#05070F"/>
+    </linearGradient>
+    <radialGradient id="bloom" cx="512" cy="520" r="520" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3A5CFF" stop-opacity="0.38"/>
+      <stop offset="1" stop-color="#3A5CFF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rib" gradientUnits="userSpaceOnUse" x1="150" y1="860" x2="880" y2="260">
+      <stop offset="0" stop-color="#D4FF4A"/>
+      <stop offset="0.32" stop-color="#2EF0B0"/>
+      <stop offset="0.68" stop-color="#3AA0FF"/>
+      <stop offset="1" stop-color="#A06BFF"/>
+    </linearGradient>
+    <filter id="soft" filterUnits="userSpaceOnUse" x="-300" y="-300" width="1624" height="1624"><feGaussianBlur stdDeviation="24"/></filter>
+    <filter id="soft2" filterUnits="userSpaceOnUse" x="-300" y="-300" width="1624" height="1624"><feGaussianBlur stdDeviation="4"/></filter>
+    <!-- the ring: back arc from the right foot, around the long way, to the left foot -->
+    <path id="ring" d="M692 774 A390 150 0 1 0 332 774"/>
+    <path id="house" d="M332 774 V450 L512 270 L692 450 V774"/>
+    <path id="houseFill" d="M332 774 V450 L512 270 L692 450 V774 Z"/>
+    <clipPath id="upper"><rect x="0" y="0" width="1024" height="680"/></clipPath>
+    <mask id="carve" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#fff"/>
+      <g clip-path="url(#upper)">
+        <use href="#houseFill" fill="#000" stroke="#000" stroke-width="152" stroke-linejoin="round" stroke-linecap="round"/>
+      </g>
+    </mask>
+  </defs>
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#bloom)"/>
+
+  <!-- glow -->
+  <g opacity="0.6" filter="url(#soft)">
+    <use href="#house" fill="none" stroke="url(#rib)" stroke-width="120" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <g opacity="0.6" filter="url(#soft)"><g mask="url(#carve)">
+    <use href="#ring" fill="none" stroke="url(#rib)" stroke-width="120" stroke-linecap="round"/>
+  </g></g>
+
+  <!-- ring (goes behind the house walls) -->
+  <g mask="url(#carve)">
+    <use href="#ring" fill="none" stroke="#000" stroke-opacity="0.35" stroke-width="110" stroke-linecap="round" transform="translate(0 12)"/>
+    <use href="#ring" fill="none" stroke="url(#rib)" stroke-width="102" stroke-linecap="round"/>
+    <use href="#ring" fill="none" stroke="#fff" stroke-opacity="0.45" stroke-width="12" stroke-linecap="round" transform="translate(-4 -14)" filter="url(#soft2)"/>
+  </g>
+
+  <!-- house (in front) -->
+  <use href="#house" fill="none" stroke="#000" stroke-opacity="0.35" stroke-width="110" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 12)"/>
+  <use href="#house" fill="none" stroke="url(#rib)" stroke-width="102" stroke-linecap="round" stroke-linejoin="round"/>
+  <use href="#house" fill="none" stroke="#fff" stroke-opacity="0.45" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" transform="translate(-6 -14)" filter="url(#soft2)"/>
+
+  <!-- the far node: you, anywhere -->
+  <circle cx="803" cy="552" r="52" fill="#A06BFF" opacity="0.7" filter="url(#soft)"/>
+  <circle cx="803" cy="552" r="36" fill="#FFFFFF"/>
+</svg>
