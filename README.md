@@ -45,6 +45,8 @@ The long version, with prerequisites: [docs/QUICKSTART.md](docs/QUICKSTART.md).
 | **Defaults that protect you** | VPN clients cannot reach your LAN; BitTorrent is blocked; the healthcheck fails if either rule disappears |
 | **Tested without a Pi** | ~480 offline test assertions, shellcheck-clean, plus a scanner that keeps personal data out of the repository |
 
+An iPhone app (status, clients, push alerts) lives in [app/](app/README.md); its design is [docs/APP.md](docs/APP.md).
+
 ## Requirements
 
 - A Raspberry Pi 4/5 (or any Debian 12+/Ubuntu 22.04+ host, arm64 or amd64) on a wired connection
