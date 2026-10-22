@@ -92,3 +92,9 @@ literal github.com/zaitsew/casavpn/
 # maintainer acknowledged its author name by merging this line; public history
 # is never rewritten.
 ack-identity e0acebbc340c
+
+# The public project URLs that the App Store listing, the privacy policy and the support
+# page must name (app/store/, docs/privacy.md, docs/support.md). They contain the account
+# name that owns this public repository; only these two exact prefixes are accepted.
+literal zaitsew.github.io/casavpn
+literal github.com/zaitsew/casavpn

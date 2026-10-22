@@ -29,6 +29,7 @@ __pycache__/
 *.pyc
 
 # iPhone app (app/)
+app/store/contact.local.json
 app/*.xcodeproj/
 app/Config/Local.xcconfig
 app/CasaKit/.build/
