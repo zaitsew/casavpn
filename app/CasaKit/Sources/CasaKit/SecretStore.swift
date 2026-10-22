@@ -115,13 +115,22 @@ public struct SettingsStore: Sendable {
     public func save(_ settings: ConnectionSettings) throws {
         let normalized = settings.normalized()
         if normalized == .empty {
-            try secrets.write(nil, for: Key.connection)
+            try deleteAll()
+            return
         } else {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
             let data = try encoder.encode(normalized)
             try secrets.write(String(decoding: data, as: UTF8.self), for: Key.connection)
         }
+        for key in Key.legacy { try? secrets.write(nil, for: key) }
+    }
+
+    /// Removes every Keychain item the app keeps for a server: the connection blob (panel address,
+    /// credential, token, session, extra headers, relay address and token, subscription base) and
+    /// the per-field items of the first versions. Sign out calls this.
+    public func deleteAll() throws {
+        try secrets.write(nil, for: Key.connection)
         for key in Key.legacy { try? secrets.write(nil, for: key) }
     }
 

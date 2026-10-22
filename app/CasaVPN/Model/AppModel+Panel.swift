@@ -194,8 +194,9 @@ extension AppModel {
         return result
     }
 
-    /// Signs out: deletes the token the app made (when the panel answers) and forgets the panel connection.
-    /// The relay settings stay.
+    /// Signs out. The app deletes its own panel token when the panel answers, tells the relay to
+    /// forget this device, then deletes every Keychain item it keeps for the server: the panel
+    /// address, token or session, extra headers, the relay address and token, and the subscription base.
     func signOut() async {
         if isDemo { exitDemo(); return }
         let old = settings
@@ -208,10 +209,9 @@ extension AppModel {
                     + "Delete it in the panel under Settings, API tokens."
             }
         }
-        var cleared = old
-        cleared.panelURL = ""; cleared.panelToken = ""; cleared.panelUser = ""; cleared.panelTokenID = 0
-        cleared.panelTokenName = ""; cleared.panelSession = ""; cleared.panelCSRF = ""; cleared.panelHeaders = []
-        save(cleared)
+        // Saving the empty set unregisters the device from the relay (best effort) and deletes the Keychain item.
+        save(.empty)
+        try? store.deleteAll()
         signOutNote = note
         signInSkipped = false
         defaults.set(false, forKey: "signInSkipped")

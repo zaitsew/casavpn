@@ -43,8 +43,8 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text(model.settings.ownsPanelToken
-                     ? "The app deletes its token \"\(model.settings.panelTokenName)\" on the panel and forgets the server."
-                     : "The app forgets the server and the credentials saved for it.")
+                     ? "The app deletes its token \"\(model.settings.panelTokenName)\" on the panel, then removes the server, the relay and every credential saved for them from this iPhone's Keychain."
+                     : "The app removes the server, the relay and every credential saved for them from this iPhone's Keychain.")
             }
             .alert(
                 "Could not read the link",

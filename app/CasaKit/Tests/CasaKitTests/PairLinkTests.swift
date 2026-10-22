@@ -93,6 +93,27 @@ struct SettingsTests {
         #expect(store.load() == .empty)
         #expect(memory.keys.isEmpty)
     }
+
+    @Test func deleteAllRemovesEveryItemOfTheServer() throws {
+        let memory = InMemorySecretStore()
+        let store = SettingsStore(secrets: memory)
+        var settings = ConnectionSettings(
+            panelURL: "https://vpn.example.com/p", panelToken: "tok", relayURL: "https://r.example.com",
+            relayToken: "rt", subURL: "https://vpn.example.com/sub/"
+        )
+        settings.panelUser = "admin"
+        settings.panelSession = "cookie"
+        settings.panelCSRF = "csrf"
+        settings.panelHeaders = [CustomHeader(name: "CF-Access-Client-Id", value: "id.example"), CustomHeader(name: "CF-Access-Client-Secret", value: "secret")]
+        try store.save(settings)
+        // Items of the first app versions that were never migrated.
+        try memory.write("https://old.example.com", for: "panelURL")
+        try memory.write("old-token", for: "relayToken")
+        #expect(!memory.keys.isEmpty)
+        try store.deleteAll()
+        #expect(memory.keys.isEmpty)
+        #expect(store.load() == .empty)
+    }
 }
 
 /// A store whose writes can be made to fail.
