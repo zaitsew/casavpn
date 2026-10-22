@@ -140,7 +140,7 @@ struct ClientDetailView: View {
                         Button("Edit") { showEdit = true }.disabled(detail == nil)
                     }
                 }
-                .sheet(isPresented: $showEdit) { ClientEditorView(editing: detail) }
+                .sheet(isPresented: $showEdit, onDismiss: { Task { await reloadAfterEdit() } }) { ClientEditorView(editing: detail) }
                 .sheet(isPresented: $showShare) { ShareClientSheet(client: client) }
                 .confirmationDialog("Reset the traffic of \(client.email)?", isPresented: $confirmReset, titleVisibility: .visible) {
                     Button("Reset traffic", role: .destructive) { Task { await model.resetTraffic(of: client) } }
@@ -163,7 +163,14 @@ struct ClientDetailView: View {
                 ContentUnavailableView("Client not found", systemImage: "person.crop.circle.badge.questionmark")
             }
         }
-        .task(id: model.clients.first(where: { $0.email == email })?.enable) { await load() }
+        // Reload when anything about the client changes in the list (toggle, edit, reset), not only the switch.
+        .task(id: model.clients.first(where: { $0.email == email })) { await load() }
+    }
+
+    /// After the editor closes: reload the record. A rename leaves nothing under this email, so go back to the list.
+    private func reloadAfterEdit() async {
+        await load()
+        if model.clientsState == .loaded, !model.clients.contains(where: { $0.email == email }) { dismiss() }
     }
 
     private func load() async {

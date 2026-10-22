@@ -100,6 +100,8 @@ final class AppModel {
     var relayFlight: Int?
     var statusFlight: Int?
     var inboundsFlight: Int?
+    /// Orders inbound refreshes: an answer that started before an accepted one is dropped.
+    var inboundTickets = SnapshotSequencer()
     /// The refresh that is running, by epoch and ticket. Whoever set it clears it, and only if it is still theirs.
     private var clientsFlight: (epoch: Int, ticket: Int)?
     private var clientTickets = SnapshotSequencer()

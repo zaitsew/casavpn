@@ -15,11 +15,12 @@ extension AppModel {
         let gen = epoch
         guard inboundsFlight != gen else { return }
         inboundsFlight = gen
+        let ticket = inboundTickets.begin()
         defer { if inboundsFlight == gen { inboundsFlight = nil } }
         if inboundsState != .loaded { inboundsState = .loading }
         do {
             let list = try await client.inbounds()
-            guard gen == epoch else { return }
+            guard gen == epoch, inboundTickets.accept(ticket) else { return }
             var fresh = list
             for index in fresh.indices where busyInbounds.contains(fresh[index].id) {
                 if let local = inbounds.first(where: { $0.id == fresh[index].id }) { fresh[index].enable = local.enable }
@@ -27,7 +28,7 @@ extension AppModel {
             inbounds = fresh
             inboundsState = .loaded
         } catch {
-            guard gen == epoch else { return }
+            guard gen == epoch, inboundTickets.accept(ticket) else { return }
             inbounds = []
             inboundsState = Self.loadState(for: error)
         }
