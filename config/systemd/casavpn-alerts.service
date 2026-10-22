@@ -42,6 +42,9 @@ LockPersonality=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged @resources
+# Return EPERM instead of killing the process: sqlite running as root calls fchown
+# (in @privileged) on x-ui.db-shm and ignores the failure.
+SystemCallErrorNumber=EPERM
 # Root owns the certificate directories, so no capability is needed for them; this
 # one is for files owned by another user (a restored panel database, backups).
 CapabilityBoundingSet=CAP_DAC_READ_SEARCH
