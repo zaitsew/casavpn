@@ -292,6 +292,9 @@ eq "  ...title" "$(ev backup.stale:2026-11-29 .title)" "Backup is 36 hours old"
 new_case; : >"$C/backups/casavpn-20261120T033000Z.tar.zst.age"; set_mtime "$C/backups/casavpn-20261120T033000Z.tar.zst.age" $((NOW - 2 * DAY))
 set_mtime "$C/backups/casavpn-20261130T033000Z.tar.zst.age" $((NOW - 3600)); alerts --dry-run
 expect_none "an old archive next to a fresh one: the newest counts"
+new_case; rm "$C/backups"/*; : >"$C/backups/casa-vpn-20261130T033000Z.tar.zst.age"
+set_mtime "$C/backups/casa-vpn-20261130T033000Z.tar.zst.age" $((NOW - 3600)); CASAVPN_BACKUP_GLOB="casa-vpn-*.tar.*" alerts --dry-run
+expect_none "CASAVPN_BACKUP_GLOB finds archives with another prefix"
 new_case; rm "$C/backups"/*; : >"$C/backups/.casavpn-20261130T033000Z.partial"; : >"$C/backups/notes.txt"
 set_mtime "$C/backups/.casavpn-20261130T033000Z.partial" $((NOW - 10)); AGE=age1placeholder
 printf 'AGE_RECIPIENT=%s\nCASAVPN_RELAY_URL=https://relay.example.com\nCASAVPN_RELAY_TOKEN=hosttoken123\n' "$AGE" >"$C/env"

@@ -45,6 +45,7 @@
 #   CASAVPN_LE_DIR              default /etc/letsencrypt
 #   CASAVPN_ALERTS_CERT         the certificate file (default <LE>/live/<domain>/fullchain.pem)
 #   CASAVPN_BACKUP_DEST         default /var/backups/casavpn
+#   CASAVPN_BACKUP_GLOB         backup file pattern (default casavpn-*.tar.*)
 #   CASAVPN_ALERTS_BOOT_ID_FILE default /proc/sys/kernel/random/boot_id
 #   CASAVPN_ALERTS_DF_PATH      default /
 #   CASAVPN_ALERTS_NOW          the current time as a Unix timestamp

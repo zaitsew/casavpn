@@ -91,7 +91,9 @@ def cmd_certdate(text):
 
 def cmd_newest(directory):
     best = None
-    for path in glob.glob(os.path.join(directory, "casavpn-*.tar.*")):
+    # CASAVPN_BACKUP_GLOB: for hosts whose backups predate the casavpn- prefix.
+    pattern = os.environ.get("CASAVPN_BACKUP_GLOB") or "casavpn-*.tar.*"
+    for path in glob.glob(os.path.join(directory, pattern)):
         if os.path.basename(path).startswith(".") or not os.path.isfile(path):
             continue
         mtime = int(os.stat(path).st_mtime)
