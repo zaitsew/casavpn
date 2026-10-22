@@ -49,7 +49,7 @@ app/
   Config/                Base.xcconfig; Local.xcconfig (yours, ignored) from the .example
   CasaKit/               Swift package, no UI: pairing link, Keychain, relay and panel clients, formatting
   CasaVPN/               the app: SwiftUI views, the app model, entitlements, privacy manifest, icon
-  tools/make-icon.swift  draws the app icon
+  Design/icon/           icon sources (SVG) and renders; the app uses tunnel.svg ("Portal Home")
 ```
 
 ## TestFlight

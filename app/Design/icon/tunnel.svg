@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0B1442"/>
+      <stop offset="0.55" stop-color="#2A1A7A"/>
+      <stop offset="1" stop-color="#5B2BB8"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="512" cy="560" r="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3DE6F0" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="#6C4CF0" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#6C4CF0" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="roof" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#C9D3FF"/>
+    </linearGradient>
+    <linearGradient id="wall" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#EEF2FF"/>
+      <stop offset="1" stop-color="#9AA9F5"/>
+    </linearGradient>
+    <linearGradient id="eave" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1B1466" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#1B1466" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#150C45"/>
+      <stop offset="1" stop-color="#07041F"/>
+    </linearGradient>
+    <linearGradient id="spill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9BFBFF" stop-opacity="0.95"/>
+      <stop offset="0.6" stop-color="#35D8F0" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#35D8F0" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="core" cx="512" cy="610" r="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.35" stop-color="#C8FFFF"/>
+      <stop offset="1" stop-color="#3DE6F0" stop-opacity="0"/>
+    </radialGradient>
+    <path id="arch" d="M342 800 V600 A170 170 0 0 1 682 600 V800 Z"/>
+    <clipPath id="doorClip"><use href="#arch"/></clipPath>
+    <clipPath id="houseClip"><path d="M512 140 L884 470 H806 V800 H218 V470 H140 Z"/></clipPath>
+    <filter id="soft" filterUnits="userSpaceOnUse" x="-300" y="-300" width="1624" height="1624"><feGaussianBlur stdDeviation="14"/></filter>
+    <filter id="soft2" filterUnits="userSpaceOnUse" x="-300" y="-300" width="1624" height="1624"><feGaussianBlur stdDeviation="40"/></filter>
+    <radialGradient id="bloom" cx="512" cy="610" r="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5CF0FF" stop-opacity="0.75"/>
+      <stop offset="0.5" stop-color="#5CF0FF" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#5CF0FF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1024" height="1024" fill="url(#sky)"/>
+  <rect width="1024" height="1024" fill="url(#halo)"/>
+
+  <!-- stars -->
+  <g fill="#fff" opacity="0.75">
+    <circle cx="120" cy="140" r="4"/><circle cx="905" cy="190" r="5"/><circle cx="800" cy="90" r="3"/>
+    <circle cx="210" cy="300" r="3"/><circle cx="930" cy="360" r="3"/><circle cx="90" cy="420" r="3"/>
+  </g>
+
+  <!-- ground and light spilling out of the door -->
+  <rect y="800" width="1024" height="224" fill="url(#ground)"/>
+  <path d="M342 800 H682 L880 1024 H144 Z" fill="url(#spill)" filter="url(#soft)"/>
+
+  <!-- house shadow -->
+  <ellipse cx="512" cy="806" rx="340" ry="18" fill="#05031A" opacity="0.55" filter="url(#soft)"/>
+
+  <!-- house body (one silhouette: roof + walls) -->
+  <path d="M512 140 L884 470 H806 V800 H218 V470 H140 Z" fill="url(#wall)" stroke="url(#wall)" stroke-width="24" stroke-linejoin="round"/>
+  <!-- roof band -->
+  <g clip-path="url(#houseClip)">
+    <path d="M512 140 L884 470 H806 L512 210 L218 470 H140 Z" fill="url(#roof)"/>
+    <rect x="130" y="470" width="760" height="70" fill="url(#eave)"/>
+  </g>
+  <path d="M512 140 L884 470 H806 L512 210 L218 470 H140 Z" fill="none" stroke="#fff" stroke-opacity="0.9" stroke-width="6" stroke-linejoin="round" transform="translate(0 -4)" clip-path="url(#houseClip)" opacity="0.6"/>
+
+  <g clip-path="url(#houseClip)"><circle cx="512" cy="610" r="420" fill="url(#bloom)"/></g>
+  <!-- door: tunnel in perspective -->
+  <g clip-path="url(#doorClip)">
+    <use href="#arch" fill="#120C52"/>
+    <g id="rings">
+      <g transform="translate(512 610) scale(0.86) translate(-512 -610)"><use href="#arch" fill="#25189A" stroke="#fff" stroke-opacity="0.35" stroke-width="5"/></g>
+      <g transform="translate(512 610) scale(0.70) translate(-512 -610)"><use href="#arch" fill="#4A33D8" stroke="#fff" stroke-opacity="0.35" stroke-width="5"/></g>
+      <g transform="translate(512 610) scale(0.56) translate(-512 -610)"><use href="#arch" fill="#2F7BF0" stroke="#fff" stroke-opacity="0.35" stroke-width="5"/></g>
+      <g transform="translate(512 610) scale(0.43) translate(-512 -610)"><use href="#arch" fill="#25BEF2" stroke="#fff" stroke-opacity="0.35" stroke-width="5"/></g>
+      <g transform="translate(512 610) scale(0.31) translate(-512 -610)"><use href="#arch" fill="#5CF0EE" stroke="#fff" stroke-opacity="0.35" stroke-width="5"/></g>
+      <g transform="translate(512 610) scale(0.20) translate(-512 -610)"><use href="#arch" fill="#C8FFFF" stroke="#fff" stroke-opacity="0.35" stroke-width="5"/></g>
+    </g>
+    <circle cx="512" cy="610" r="150" fill="url(#core)"/>
+    <!-- vignette inside the door -->
+    <use href="#arch" fill="none" stroke="#0A0630" stroke-opacity="0.55" stroke-width="30" filter="url(#soft)"/>
+  </g>
+  <!-- door frame -->
+  <use href="#arch" fill="none" stroke="#FFFFFF" stroke-opacity="0.85" stroke-width="7"/>
+</svg>
