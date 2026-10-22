@@ -49,6 +49,12 @@ expect "prints the inbound guide with the configured ports" 0 "Port             
 expect "prints the router step with both ports" 0 "443  (the VPN)      8443  (client subscriptions)"
 expect "tells the user not to forward SSH or the panel" 0 "Do not forward 22, 2053 or 2096"
 lacks  "never prints a credential" "PANEL_PASSWORD="
+expect "installs the alerts script and its two helpers" 0 "would install /usr/local/bin/casavpn-alerts"
+expect "  ...the sender library" 0 "would install /usr/local/lib/casavpn/casavpn-notify.sh"
+expect "  ...and the database probe" 0 "would install /usr/local/lib/casavpn/host_probe.py"
+expect "installs the alerts timer next to the others" 0 "casavpn-alerts.timer"
+expect "plans the alerts timer only when a channel is set" 0 "casavpn-alerts.timer if CASAVPN_RELAY_URL"
+expect "needs qrencode for the pairing code" 0 "qrencode"
 OUT="$("$INSTALL" --dry-run --env "$T/ok.env" --skip-firewall --skip-ssh --skip-3xui 2>&1)"; RC=$?
 expect "--skip-* leaves the step out" 0 "dry run finished"
 lacks  "  ...firewall step absent" "== Firewall"

@@ -10,7 +10,7 @@
 # so you can fill it in.
 #
 # What it does, in order (each step can be skipped with --skip-<step>):
-#   packages    apt: nginx nftables fail2ban sqlite3 jq age zstd certbot ...
+#   packages    apt: nginx nftables fail2ban sqlite3 jq age zstd qrencode certbot ...
 #   files       our scripts to /usr/local/bin, helpers to /usr/local/lib/casavpn
 #   3xui        download the pinned 3x-ui release, verify its SHA-256, install,
 #               then replace the Xray core it bundles with the one pinned in
@@ -24,7 +24,8 @@
 #   ssh         key-only SSH, no root, AllowUsers (refused if it could lock you out)
 #   firewall    nftables default-deny (refused if your SSH session is not from the LAN)
 #   fail2ban    an sshd jail
-#   timers      casavpn-ddns (every minute) and casavpn-backup (nightly)
+#   timers      casavpn-ddns (every minute), casavpn-backup (nightly) and, when
+#               an alert channel is set, casavpn-alerts (every 15 minutes)
 #   updates     unattended security upgrades
 #
 # What it does NOT do: create the VPN inbound and its clients (the panel does
@@ -322,7 +323,7 @@ preflight() {
 
 # ===================================================================== packages ==
 
-PACKAGES="nginx nftables fail2ban python3-systemd sqlite3 jq age zstd curl openssl dnsutils ca-certificates tar util-linux unattended-upgrades"
+PACKAGES="nginx nftables fail2ban python3 python3-systemd sqlite3 jq age zstd curl openssl dnsutils qrencode iproute2 ca-certificates tar util-linux unattended-upgrades"
 CERT_PACKAGES="certbot python3-certbot-dns-cloudflare"
 
 step_packages() {
@@ -340,13 +341,13 @@ step_packages() {
 step_files() {
   step "Our scripts and helpers"
   local f
-  for f in casavpn-ddns casavpn-backup casavpn-minver; do
+  for f in casavpn-ddns casavpn-backup casavpn-minver casavpn-alerts; do
     install_file 0755 "$HERE/scripts/$f" "$BIN_DIR/$f"
   done
   install_file 0755 "$HERE/scripts/healthcheck.sh" "$BIN_DIR/casavpn-healthcheck"
   install_file 0755 "$HERE/scripts/upgrade.sh" "$BIN_DIR/casavpn-upgrade"
   install_file 0755 "$HERE/scripts/rollback.sh" "$BIN_DIR/casavpn-rollback"
-  for f in common.sh casavpn-notify.sh set_min_client_ver.py check_xray_template.py render_links.py extract_zip_member.py; do
+  for f in common.sh casavpn-notify.sh host_probe.py set_min_client_ver.py check_xray_template.py render_links.py extract_zip_member.py; do
     install_file 0755 "$LIB/$f" "$LIB_DIR/$f"
   done
   install_file 0644 "$PIN" "$LIB_DIR/xui-release.env"
@@ -709,13 +710,14 @@ step_fail2ban() {
 # ====================================================================== timers ==
 
 step_timers() {
-  step "Timers: DDNS and backups"
+  step "Timers: DDNS, backups and alerts"
   local f
-  for f in casavpn-ddns.service casavpn-ddns.timer casavpn-backup.service casavpn-backup.timer; do
+  for f in casavpn-ddns.service casavpn-ddns.timer casavpn-backup.service casavpn-backup.timer casavpn-alerts.service casavpn-alerts.timer; do
     install_file 0644 "$HERE/config/systemd/$f" "$SYSTEMD_DIR/$f"
   done
   if [ "$DRY_RUN" = 1 ]; then
-    log "  would enable casavpn-ddns.timer if CF_API_TOKEN is set, and casavpn-backup.timer if AGE_RECIPIENT is set"
+    log "  would enable casavpn-ddns.timer if CF_API_TOKEN is set, casavpn-backup.timer if AGE_RECIPIENT is set,"
+    log "  and casavpn-alerts.timer if CASAVPN_RELAY_URL and CASAVPN_RELAY_TOKEN (or NTFY_URL) are set"
   else
     systemctl daemon-reload
     if [ -n "$CF_API_TOKEN" ] && [ -n "$CF_ZONE_ID" ]; then
@@ -730,6 +732,13 @@ step_timers() {
     else
       warn "backups are not enabled (AGE_RECIPIENT is empty)"
       leave "Backups: run 'age-keygen -o ~/.config/casavpn/age-identity.txt' on your LAPTOP, put the public key in AGE_RECIPIENT, re-run install.sh (docs/BACKUP.md)."
+    fi
+    if { [ -n "$CASAVPN_RELAY_URL" ] && [ -n "$CASAVPN_RELAY_TOKEN" ]; } || [ -n "$NTFY_URL" ]; then
+      systemctl enable --now casavpn-alerts.timer >/dev/null 2>&1 && ok "casavpn-alerts.timer enabled (every 15 minutes)"
+      /usr/local/bin/casavpn-alerts --dry-run >&2 || warn "casavpn-alerts --dry-run failed; read the message above"
+    else
+      warn "alerts are not enabled (no CASAVPN_RELAY_URL/CASAVPN_RELAY_TOKEN and no NTFY_URL)"
+      leave "Alerts: deploy the relay (docs/APP.md, Setup), put CASAVPN_RELAY_URL and CASAVPN_RELAY_TOKEN (the host token) in $ENV_FILE, re-run install.sh, then 'sudo casavpn-pair' (or set NTFY_URL for ntfy alone)."
     fi
   fi
 }

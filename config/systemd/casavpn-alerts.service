@@ -1,0 +1,47 @@
+[Unit]
+Description=Check the VPN host and push alerts (certificate, clients, backup, disk, reboot)
+Documentation=file:///usr/local/share/doc/casavpn/MONITORING.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The script reads /etc/casavpn/casavpn.env itself (0600 root), so there is no
+# EnvironmentFile= here and the unit cannot use DynamicUser=.
+ExecStart=/usr/local/bin/casavpn-alerts
+TimeoutStartSec=2min
+Nice=10
+
+# Hardening: read the panel database, the certificate and the backup directory,
+# send HTTPS, keep one root-owned state directory (the last boot id and the
+# repeat limits for ntfy), nothing else.
+StateDirectory=casavpn
+StateDirectoryMode=0700
+# sqlite must be able to touch x-ui.db-shm to read a WAL database (the same reason
+# casavpn-backup.service lists it). The script opens the database read-only.
+ReadWritePaths=/var/lib/casavpn -/etc/x-ui
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+# AF_NETLINK: ss lists the listening sockets through it. AF_UNIX: systemctl is-active.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+# Root owns the certificate directories, so no capability is needed for them; this
+# one is for files owned by another user (a restored panel database, backups).
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH

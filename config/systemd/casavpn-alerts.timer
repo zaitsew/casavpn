@@ -1,0 +1,14 @@
+[Unit]
+Description=Check the VPN host every 15 minutes
+Documentation=file:///usr/local/share/doc/casavpn/MONITORING.md
+
+[Timer]
+# First run 5 minutes after boot (the host.rebooted alert comes from that run),
+# then 15 minutes after each run finishes. A lasting condition is delivered once
+# per 6 h window: the events carry dedupe keys.
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
