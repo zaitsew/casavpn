@@ -1,28 +1,28 @@
-// CasaVPN external uptime monitor: a Cloudflare Worker on a 5-minute cron.
+// CasaVPN external uptime monitor and alert relay: a Cloudflare Worker.
 //
-// Every run it
+// On a 5-minute cron it
 //   1. resolves vpn.example.com through DNS-over-HTTPS (to report where DNS points),
 //   2. opens a TCP connection to vpn.example.com:443 (the Reality listener),
 //   3. feeds the result to the state machine in transition.ts, and
-//   4. pushes to ntfy only when the state changes: down after two failures in a
-//      row, and recovered.
+//   4. on a state change (down after two failures in a row, and recovered)
+//      records an alert and pushes it to the iPhone app over APNs (monitor.ts).
+//
+// On HTTPS it serves the relay API of docs/APP.md (relay.ts): the app registers
+// its device and reads the alert history; the host scripts post events.
 //
 // It runs on Cloudflare's network, not in the house, so it still reports when
-// the Pi or the home connection is dead. State lives in one KV key.
+// the Pi or the home connection is dead. State lives in KV.
 
 import { connect } from "cloudflare:sockets";
-import { initialState, transition, type Alert, type CheckResult, type MonitorState } from "./transition.ts";
+import { applyCheck, type MonitorEnv } from "./monitor.ts";
+import { handle, type Deps } from "./relay.ts";
+import type { CheckResult } from "./transition.ts";
 
-export interface Env {
-  STATE: KVNamespace;
-  /** Secret: the full ntfy topic URL, e.g. https://ntfy.sh/casavpn-<random>. */
-  NTFY_URL: string;
-  TARGET_HOST?: string;
-  TARGET_PORT?: string;
-}
+export type Env = MonitorEnv & { STATE: KVNamespace };
 
-const STATE_KEY = "state";
 const CONNECT_TIMEOUT_MS = 8000;
+
+const deps = (): Deps => ({ fetch: (input, init) => fetch(input, init), now: () => Date.now() });
 
 /** First A record for `host` according to Cloudflare's DoH resolver, or null. */
 export async function resolveA(host: string): Promise<string | null> {
@@ -68,56 +68,19 @@ async function check(host: string, port: number): Promise<CheckResult> {
   return error === null ? { ok: true, ip } : { ok: false, ip, error };
 }
 
-async function notify(env: Env, alert: Alert): Promise<void> {
-  // Header values must be plain ASCII.
-  const res = await fetch(env.NTFY_URL, {
-    method: "POST",
-    body: alert.message,
-    headers: {
-      Title: alert.kind === "down" ? "CasaVPN is DOWN" : "CasaVPN recovered",
-      Priority: alert.kind === "down" ? "urgent" : "default",
-      Tags: alert.kind === "down" ? "rotating_light" : "white_check_mark",
-    },
-  });
-  if (!res.ok) throw new Error(`ntfy answered ${res.status}`);
-}
-
-async function loadState(env: Env, now: string): Promise<MonitorState> {
-  const raw = await env.STATE.get(STATE_KEY);
-  if (!raw) return initialState(now);
-  try {
-    return JSON.parse(raw) as MonitorState;
-  } catch {
-    return initialState(now);
-  }
-}
-
 export async function runCheck(env: Env): Promise<void> {
   // No default on purpose: a monitor pointed at a placeholder would report
   // "up" or "down" about somebody else's host.
   if (!env.TARGET_HOST) throw new Error("TARGET_HOST is not set (wrangler.toml, [vars])");
-  const host = env.TARGET_HOST;
-  const port = Number(env.TARGET_PORT ?? "443");
-  const now = new Date().toISOString();
-
-  const prev = await loadState(env, now);
-  const result = await check(host, port);
-  const { state, alert } = transition(prev, result, now, `${host}:${port}`);
-
-  if (alert) {
-    // If ntfy is unreachable we keep the old state, so the next run reaches the
-    // same conclusion and tries again instead of swallowing the alert.
-    await notify(env, alert);
-  }
-  // KV free tier allows 1000 writes a day: write only when something changed.
-  if (JSON.stringify(state) !== JSON.stringify(prev)) {
-    await env.STATE.put(STATE_KEY, JSON.stringify(state));
-  }
-  console.log(JSON.stringify({ host, port, ok: result.ok, ip: result.ip, status: state.status, failures: state.failures, alert: alert?.kind ?? null }));
+  const result = await check(env.TARGET_HOST, Number(env.TARGET_PORT ?? "443"));
+  await applyCheck(env, deps(), result);
 }
 
 export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(runCheck(env));
+  },
+  async fetch(request: Request, env: Env): Promise<Response> {
+    return handle(request, env, deps());
   },
 } satisfies ExportedHandler<Env>;
