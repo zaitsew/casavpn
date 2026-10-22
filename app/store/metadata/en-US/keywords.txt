@@ -1,0 +1,1 @@
+admin,console,self-hosted,homelab,monitor,alerts,clients,traffic,remote,panel,dashboard,qr,share
