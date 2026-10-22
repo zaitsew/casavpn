@@ -25,7 +25,7 @@ struct InboundsView: View {
                             NavigationLink(value: inbound.id) { InboundRow(inbound: inbound) }
                         }
                     } footer: {
-                        Text("\(model.inbounds.count) inbounds, \(model.inbounds.reduce(0) { $0 + $1.clientCount }) clients")
+                        Text("\(model.inbounds.count) inbounds, \(model.clients.isEmpty ? model.inbounds.reduce(0) { $0 + $1.clientCount } : model.clients.count) clients")
                     }
                 }
             }

@@ -79,7 +79,6 @@ struct SignInView: View {
         Section {
             TextField("https://vpn.example.com:8443/path", text: $address)
                 .keyboardType(.URL)
-                .textContentType(.URL)
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .focused($focus, equals: .address)
@@ -134,6 +133,17 @@ struct SignInView: View {
                 }
             }
             .disabled(!canSubmit)
+            if !isReauth {
+                Button {
+                    model.startDemo()
+                } label: {
+                    HStack {
+                        Spacer()
+                        Label("Try the demo", systemImage: "play.circle")
+                        Spacer()
+                    }
+                }
+            }
             if let message {
                 StateNotice(symbol: "exclamationmark.triangle", text: message, tint: .red)
                 if message.contains("docs/APP.md") {
@@ -144,7 +154,7 @@ struct SignInView: View {
                 StateNotice(symbol: "info.circle", text: notice, tint: .blue)
             }
         } footer: {
-            Text("The app makes its own API token on the panel and keeps only that token in this iPhone's Keychain. It does not keep your password.")
+            Text("The app makes its own API token on the panel and keeps only that token in this iPhone's Keychain. It does not keep your password. The demo shows a fictional server with sample data and needs no network.")
         }
     }
 
@@ -162,18 +172,13 @@ struct SignInView: View {
                 }
             }
             .buttonBorderShape(.roundedRectangle)
-            Button {
-                model.startDemo()
-            } label: {
-                Label("Try the demo", systemImage: "play.circle")
-            }
             if model.settings.hasRelay {
                 Button("Continue with alerts only") { model.skipSignIn() }
             }
         } header: {
             Text("Other ways in")
         } footer: {
-            Text("Run casavpn-pair on the server for the QR code or the casavpn:// link. The demo shows a fictional server with sample data and needs no network.")
+            Text("Run casavpn-pair on the server for the QR code or the casavpn:// link.")
         }
     }
 
@@ -188,7 +193,8 @@ struct SignInView: View {
         address = model.settings.panelURL
         username = model.settings.panelUser
         headers = model.settings.panelHeaders
-        if address.isEmpty { focus = .address } else { focus = .password }
+        // The first screen opens without the keyboard, so the demo and pairing buttons stay in view.
+        if isReauth { focus = .password }
     }
 
     private func signIn() async {
