@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Added
+
+- Host-side alerts for the iPhone app and its relay ([docs/APP.md](docs/APP.md)).
+  `scripts/lib/casavpn-notify.sh` is one sender: it POSTs an event to
+  `$CASAVPN_RELAY_URL/v1/events` with the host token (read by curl from stdin, not
+  argv) and to `NTFY_URL`; a failed delivery is logged and never stops the caller.
+- `casavpn-alerts` (systemd timer, every 15 minutes) reads the certificate, the
+  3x-ui database (read-only), `ss`, the backup directory, `df` and the boot id and
+  sends `cert.expiring`, `client.traffic`, `client.expiring`, `xray.down`,
+  `backup.stale`, `disk.low` and `host.rebooted`. `--dry-run` prints the events.
+  `install.sh` installs it and enables the timer when a relay or `NTFY_URL` is set.
+- `casavpn-ddns` also sends `ip.changed` and `ddns.failed` to the relay, with the
+  same rate limits as ntfy.
+- `casavpn-pair` prints the `casavpn://pair` link and a terminal QR for the app. It
+  makes the panel's `casavpn-app` API token with `x-ui setting -getApiToken` and asks
+  before replacing an earlier one.
+- `casavpn.env`: optional `CASAVPN_RELAY_URL` and `CASAVPN_RELAY_TOKEN`
+  (validated: https URL, both or neither). The installer now also installs
+  `python3`, `qrencode` and `iproute2`.
+
 ### Fixed
 
 - `./check.sh` run by the pre-push hook from a linked worktree no longer lets the

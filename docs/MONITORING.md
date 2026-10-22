@@ -52,9 +52,21 @@ What pushes from where:
 
 | Source | Pushes when |
 |---|---|
-| `casavpn-ddns` (host) | the IP changed and was repaired, three runs in a row failed, the IP is not public, duplicate records ([DYNAMIC-IP.md](DYNAMIC-IP.md)) |
+| `casavpn-ddns` (host) | the IP changed and was repaired, three runs in a row failed, the IP is not public, duplicate records ([DYNAMIC-IP.md](DYNAMIC-IP.md)). With the relay set, the first two also go to the relay as `ip.changed` and `ddns.failed` |
+| `casavpn-alerts` (host, every 15 min) | the certificate expires in under 14 days, a client nears or hits its traffic limit or expiry, Xray does not listen while x-ui runs, no backup for 36 h, the disk is over 90 % full, the host rebooted. Sent to the relay and, if set, ntfy ([APP.md](APP.md#alerts)) |
 | `pull-backups.sh` (laptop) | no fresh backup for 48 h, or no pull for 7 days |
-| the Worker (Cloudflare) | the VPN port stops answering / recovers |
+| the Worker (Cloudflare) | the VPN port stops answering / recovers. With the relay's push keys set, it also pushes to the iPhone app |
+| the relay (the same Worker) | receives the host's events (`POST /v1/events`), keeps the history and sends the push through APNs ([APP.md](APP.md)) |
+
+`casavpn-alerts` and the relay are optional. Set `CASAVPN_RELAY_URL` and
+`CASAVPN_RELAY_TOKEN` in `casavpn.env` (the host token from the relay's setup), or
+only `NTFY_URL`, and run `install.sh` again; it enables
+`casavpn-alerts.timer` when either channel exists. Read the log with
+`journalctl -u casavpn-alerts.service`, check what it would send with
+`sudo casavpn-alerts --dry-run`, and see the next run with
+`systemctl list-timers casavpn-alerts.timer`. A delivery that fails is retried on
+the next run, because the dedupe state is written only after the relay accepts the
+event.
 
 ## 3. The healthcheck
 

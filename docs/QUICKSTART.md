@@ -127,6 +127,20 @@ CASAVPN_DOMAIN=vpn.example.com ./scripts/healthcheck.sh
 Finally set up [monitoring](MONITORING.md) and run a [restore drill](BACKUP.md#prove-it-restores)
 once. A backup you never restored is a hope.
 
+## 8. Optional: the iPhone app and push alerts
+
+Once the alert relay is deployed ([APP.md](APP.md#setup)), put its URL and the host
+token in `casavpn.env` (`CASAVPN_RELAY_URL`, `CASAVPN_RELAY_TOKEN`), run
+`sudo ./install.sh` again, and pair the phone:
+
+```bash
+sudo casavpn-pair          # asks for the relay's app token, prints a QR code
+```
+
+Scan the code in the app, then clear the terminal: it contains secrets. If you
+pair a second phone, the command replaces the panel token and the first phone
+must scan the new code.
+
 ## What the installer does and does not do
 
 | Automated by `install.sh` | Documented, left to you |
