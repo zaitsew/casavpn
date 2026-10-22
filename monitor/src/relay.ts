@@ -32,8 +32,9 @@ export interface RelayEnv extends ApnsEnv, TargetEnv {
 /**
  * Records an alert and pushes it to every device. Returns null when `dedupeKey`
  * was seen in the last 6 hours: nothing is stored and nothing is pushed.
- * The history write comes before the marker and the push: a crash between them
- * can repeat an alert, never lose one.
+ * The history write comes first, the marker before the push: a crash between
+ * the two can repeat an alert, never lose one. KV has no compare-and-set, so two
+ * identical events that arrive together can both pass the check and both push.
  */
 export async function raiseAlert(
   env: RelayEnv,
@@ -139,8 +140,8 @@ const routes: Record<string, Route> = {
         if (!/^\d{1,3}$/.test(raw) || Number(raw) < 1 || Number(raw) > 100) return bad("limit must be 1-100");
         limit = Number(raw);
       }
-      const [alerts, monitor] = await Promise.all([loadAlerts(env.STATE), monitorView(env)]);
-      return json(200, { alerts: alerts.slice(0, limit), monitor });
+      const [alerts, monitor] = await Promise.all([loadAlerts(env.STATE, limit), monitorView(env)]);
+      return json(200, { alerts: alerts, monitor });
     },
   },
   events: {

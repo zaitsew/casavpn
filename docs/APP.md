@@ -82,13 +82,28 @@ Monitor {"status": "up" | "down" | "unknown", "since": "<ISO>",
 pushed to nobody. The host scripts use it so a condition that lasts does not
 alert every run (for example `cert.expiring:2026-12-30`, `client.traffic:alice:90`).
 
-Storage, in the existing KV namespace: `devices` (one JSON array), `alerts` (the
-newest 100), `dedupe:<key>` (with a 6-hour TTL), and the monitor's `state`.
-Alerts, devices and dedupe markers are written only when something changes. The
-monitor writes `state` on every cron run (288 a day) so `lastCheck` is current; with
-the rest that stays under the free plan's 1,000 a day. A monitor alert is recorded
-once even when its state write fails and the next run repeats the transition (the
-marker `dedupe:monitor:<kind>:<when the previous state began>`).
+Storage, in the existing KV namespace: `devices` (one JSON array), `alert:<key>`
+(one key per alert), `dedupe:<key>` (with a 6-hour TTL), and the monitor's `state`.
+
+- **Alerts.** The Alert JSON is the key's metadata (KV allows 1,024 bytes; the relay
+  shortens the body, then the title, if needed), so `GET /v1/alerts` is one `list()`
+  call with no per-alert read. The key is `alert:` + (9999999999999 − epoch ms) in 13
+  digits + `-` + 6 random hex digits: KV lists keys in ascending order, so the newest
+  comes first. Each key expires after 30 days; "the newest 100" is the list limit.
+  No key is ever read and rewritten, so two writers (cron and a host script) cannot
+  overwrite each other.
+- **Devices** are one array, read and rewritten on a registration (rare, and the app
+  is the only writer). Registering a known token moves it to the newest slot, so the
+  phone in use is never the one dropped past 10.
+- **Dedupe** is best effort. KV has no compare-and-set, so two identical events that
+  arrive at the same moment can both pass the check and both push. The relay marks the
+  key before it pushes, which narrows that window; it does not close it.
+- **Writes.** An alert costs 2 (its key and, with `dedupe`, the marker), a device
+  registration 1. The monitor writes `state` on every cron run (288 a day) so
+  `lastCheck` is current. With a few alerts a day that stays under the free plan's
+  1,000 writes a day. A monitor alert is recorded once even when its state write fails
+  and the next run repeats the transition (the marker
+  `dedupe:monitor:<kind>:<when the previous state began>`).
 
 ### Push
 

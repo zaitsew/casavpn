@@ -150,8 +150,8 @@ npm run typecheck   # tsc against the Workers types
 
 - The Worker has a public URL (`workers_dev = true`); every route needs a bearer token.
   The two tokens are different, so a leaked host token cannot read the history.
-- Storage is one KV namespace: `devices`, `alerts` (newest 100), `dedupe:<key>` (6-hour
-  expiry) and `state`. The monitor writes `state` every run (288 a day) so the app can
+- Storage is one KV namespace: `devices`, `alert:<key>` (one key per alert, 30-day
+  expiry; the app reads the newest 100), `dedupe:<key>` (6-hour expiry, best effort) and `state`. The monitor writes `state` every run (288 a day) so the app can
   show the time of the last check; the free plan allows 1,000 writes a day.
 - A push that fails is not retried; the alert stays in the history.
 - If the state write fails after a transition, the next run reaches the same

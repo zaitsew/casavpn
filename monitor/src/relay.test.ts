@@ -84,15 +84,28 @@ test("POST /v1/devices stores a lowercase token; DELETE removes it", async () =>
   assert.equal((await call(req("DELETE", "/v1/devices/not-hex"))).status, 400);
 });
 
-test("registering the same device again changes nothing", async () => {
-  const { call, env } = setup();
+test("registering a device again refreshes it and moves it to the newest slot", async () => {
+  const { call, env, tick } = setup();
   const body = { token: TOKEN_A, environment: "production", name: "Phone" };
   await call(req("POST", "/v1/devices", { body }));
-  await call(req("POST", "/v1/devices", { body }));
-  assert.equal(env.STATE.puts.filter((k) => k === "devices").length, 1);
+  await call(req("POST", "/v1/devices", { body: { token: TOKEN_B, environment: "production", name: "Other" } }));
+  tick(60_000);
   await call(req("POST", "/v1/devices", { body: { ...body, name: "Renamed" } }));
-  assert.equal(env.STATE.json<Device[]>("devices")[0]!.name, "Renamed");
-  assert.equal(env.STATE.json<Device[]>("devices").length, 1);
+  const devices = env.STATE.json<Device[]>("devices");
+  assert.deepEqual(devices.map((d) => [d.token, d.name]), [[TOKEN_B, "Other"], [TOKEN_A, "Renamed"]]);
+  assert.equal(devices[1]!.addedAt, "2026-10-22T12:01:00.000Z");
+});
+
+test("a phone that re-registers with 10 devices stored is not the one evicted", async () => {
+  const { call, env } = setup();
+  const tokens = Array.from({ length: 10 }, (_, i) => i.toString(16).padStart(2, "0").repeat(32));
+  for (const token of tokens) await call(req("POST", "/v1/devices", { body: { token, environment: "production", name: "d" } }));
+  await call(req("POST", "/v1/devices", { body: { token: tokens[0], environment: "production", name: "d" } }));
+  await call(req("POST", "/v1/devices", { body: { token: TOKEN_A, environment: "production", name: "new" } }));
+  const kept = env.STATE.json<Device[]>("devices").map((d) => d.token);
+  assert.equal(kept.length, 10);
+  assert.ok(kept.includes(tokens[0]!), "the refreshed phone stays");
+  assert.ok(!kept.includes(tokens[1]!), "the oldest untouched one goes");
 });
 
 test("at most 10 devices: the oldest is dropped", async () => {
@@ -149,7 +162,7 @@ test("bodies over 4 KB are refused with 413", async () => {
   });
   const chunked = new Request(BASE + "/v1/events", { method: "POST", headers: { authorization: `Bearer ${HOST}` }, body: stream, duplex: "half" } as RequestInit);
   assert.equal((await call(chunked)).status, 413);
-  assert.equal(env.STATE.data.has("alerts"), false);
+  assert.equal(env.STATE.alerts().length, 0);
 });
 
 test("event validation", async () => {
@@ -173,7 +186,7 @@ test("event validation", async () => {
   for (const body of cases) {
     assert.equal((await call(req("POST", "/v1/events", { token: HOST, body }))).status, 400, JSON.stringify(body));
   }
-  assert.equal(env.STATE.data.has("alerts"), false);
+  assert.equal(env.STATE.alerts().length, 0);
   const edge = { kind: "a".repeat(32), severity: "info", title: "t".repeat(80), body: "b".repeat(400), dedupe: "d".repeat(64) };
   assert.equal((await call(req("POST", "/v1/events", { token: HOST, body: edge }))).status, 202);
   assert.equal((await call(req("POST", "/v1/events", { token: HOST, body: { ...event, body: "" } }))).status, 202);
@@ -186,7 +199,7 @@ test("POST /v1/events stores the alert and answers 202 with id and pushed", asyn
   assert.equal(r.status, 202);
   const answer = (await r.json()) as { id: string; pushed: number };
   assert.equal(answer.pushed, 0);
-  const alerts = env.STATE.json<Alert[]>("alerts");
+  const alerts = env.STATE.alerts();
   assert.equal(alerts.length, 1);
   assert.deepEqual(alerts[0], {
     id: answer.id,
@@ -207,25 +220,48 @@ test("dedupe: a repeated key within 6 hours is stored and pushed nowhere", async
   const again = await call(req("POST", "/v1/events", { token: HOST, body: e }));
   assert.equal(again.status, 200);
   assert.deepEqual(await again.json(), { deduped: true });
-  assert.equal(env.STATE.json<Alert[]>("alerts").length, 1);
+  assert.equal(env.STATE.alerts().length, 1);
   // Another key, and an event without a key, both go through.
   assert.equal((await call(req("POST", "/v1/events", { token: HOST, body: { ...e, dedupe: "other" } }))).status, 202);
   assert.equal((await call(req("POST", "/v1/events", { token: HOST, body: event }))).status, 202);
   assert.equal((await call(req("POST", "/v1/events", { token: HOST, body: event }))).status, 202);
-  assert.equal(env.STATE.json<Alert[]>("alerts").length, 4);
+  assert.equal(env.STATE.alerts().length, 4);
 });
 
-test("the history keeps the newest 100", async () => {
-  const { env, f, tick } = setup();
-  const deps = { fetch: f.fn, now: () => NOW };
+test("every alert is its own key, with a 30-day expiry; a read returns the newest 100", async () => {
+  const { env, f, call } = setup();
+  let now = NOW;
+  const deps = { fetch: f.fn, now: () => now };
   for (let i = 0; i < 105; i++) {
-    tick(1);
+    now += 1;
     await raiseAlert(env, deps, { ...event, title: `n${i}` }, "host");
   }
-  const alerts = env.STATE.json<Alert[]>("alerts");
-  assert.equal(alerts.length, 100);
-  assert.equal(alerts[0]!.title, "n104");
-  assert.equal(alerts[99]!.title, "n5");
+  assert.equal(env.STATE.data.has("alerts"), false, "no shared history key");
+  const keys = [...env.STATE.data.keys()].filter((k) => k.startsWith("alert:"));
+  assert.equal(keys.length, 105);
+  assert.ok(keys.every((k) => /^alert:\d{13}-[0-9a-f]{6}$/.test(k)));
+  assert.ok(keys.every((k) => env.STATE.ttls.get(k) === 30 * 86400));
+  const body = (await (await call(req("GET", "/v1/alerts?limit=100"))).json()) as { alerts: Alert[] };
+  assert.equal(body.alerts.length, 100);
+  assert.equal(body.alerts[0]!.title, "n104");
+  assert.equal(body.alerts[99]!.title, "n5");
+});
+
+test("two alerts raised at the same moment both survive", async () => {
+  const { env, f } = setup();
+  const deps = { fetch: f.fn, now: () => NOW };
+  await Promise.all(Array.from({ length: 20 }, (_, i) => raiseAlert(env, deps, { ...event, title: `n${i}` }, "host")));
+  assert.equal(env.STATE.alerts().length, 20);
+});
+
+test("an alert that would overflow KV's 1 KB metadata is shortened, not refused", async () => {
+  const { call, env } = setup();
+  const wide = { ...event, title: "\u00e9".repeat(80), body: "\u4e2d".repeat(400) };
+  assert.equal((await call(req("POST", "/v1/events", { token: HOST, body: wide }))).status, 202);
+  const [a] = env.STATE.alerts();
+  assert.ok(new TextEncoder().encode(JSON.stringify(a)).length <= 1000);
+  assert.ok(a!.body.length > 0 && a!.body.length < 400);
+  assert.equal(a!.kind, "ip.changed");
 });
 
 test("alert ids sort by time", async () => {
@@ -272,7 +308,7 @@ test("POST /v1/test records a test alert from the app", async () => {
   const r = await call(req("POST", "/v1/test"));
   assert.equal(r.status, 202);
   const answer = (await r.json()) as { id: string; pushed: number };
-  const [alert] = env.STATE.json<Alert[]>("alerts");
+  const [alert] = env.STATE.alerts();
   assert.equal(alert!.id, answer.id);
   assert.equal(alert!.kind, "test");
   assert.equal(alert!.source, "app");
@@ -296,5 +332,5 @@ test("with APNs configured, an event is pushed to every device and dead tokens a
   assert.equal(f.calls.length, 2);
   assert.deepEqual(env.STATE.json<Device[]>("devices").map((d) => d.token), [TOKEN_A]);
   // The alert is in the history whatever APNs said.
-  assert.equal(env.STATE.json<Alert[]>("alerts").length, 1);
+  assert.equal(env.STATE.alerts().length, 1);
 });

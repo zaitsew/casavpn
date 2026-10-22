@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { applyCheck } from "./monitor.ts";
 import { resetJwtCache } from "./apns.ts";
 import { NOW, TOKEN_A, fakeFetch, makeEnv, makeKey } from "./testutil.ts";
-import type { Alert } from "./store.ts";
 import type { StoredState } from "./state.ts";
 import type { CheckResult } from "./transition.ts";
 
@@ -27,7 +26,7 @@ function setup(extra = {}) {
   return { env, f, deps, tick: (ms = 300_000) => (now += ms), run: (r: CheckResult) => quiet(() => applyCheck(env, deps, r)) };
 }
 
-const alertsOf = (env: ReturnType<typeof makeEnv>) => (env.STATE.json<Alert[]>("alerts") ?? []).map((a) => a.kind);
+const alertsOf = (env: ReturnType<typeof makeEnv>) => env.STATE.alerts().map((a) => a.kind);
 
 test("two failures raise vpn.down once, recovery raises vpn.recovered once", async () => {
   const { env, run, tick } = setup();
@@ -38,7 +37,7 @@ test("two failures raise vpn.down once, recovery raises vpn.recovered once", asy
   tick();
   await run(fail);
   assert.deepEqual(alertsOf(env), ["vpn.down"]);
-  const [down] = env.STATE.json<Alert[]>("alerts");
+  const [down] = env.STATE.alerts();
   assert.equal(down!.severity, "critical");
   assert.equal(down!.source, "monitor");
   assert.equal(down!.title, "CasaVPN is down");
@@ -52,7 +51,7 @@ test("two failures raise vpn.down once, recovery raises vpn.recovered once", asy
   tick();
   await run(ok);
   assert.deepEqual(alertsOf(env), ["vpn.recovered", "vpn.down"]);
-  assert.equal(env.STATE.json<Alert[]>("alerts")[0]!.severity, "info");
+  assert.equal(env.STATE.alerts()[0]!.severity, "info");
 });
 
 test("the state records lastCheck and target on every run", async () => {

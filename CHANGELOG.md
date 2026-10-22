@@ -6,7 +6,7 @@
 
 - The `monitor/` Worker is now also the alert relay of [docs/APP.md](docs/APP.md). Its own
   transitions are alerts (`vpn.down` critical, `vpn.recovered` info): recorded once in a
-  100-entry history in KV and pushed to the iPhone app through APNs (ES256 JWT signed with
+  history in KV (one key per alert, 30 days) and pushed to the iPhone app through APNs (ES256 JWT signed with
   WebCrypto, cached 50 minutes). A new HTTPS API serves `POST`/`DELETE /v1/devices`,
   `GET /v1/alerts`, `POST /v1/events` (6-hour dedupe) and `POST /v1/test`, behind two
   bearer tokens (`APP_TOKEN`, `HOST_TOKEN`) compared in constant time.

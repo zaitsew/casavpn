@@ -1,24 +1,39 @@
 // Fakes for the tests: an in-memory KV, a recording fetch, a pinned clock.
 
-import type { KV } from "./store.ts";
+import type { Alert, KV } from "./store.ts";
 import type { MonitorEnv } from "./monitor.ts";
 
 export class FakeKV implements KV {
   data = new Map<string, string>();
   ttls = new Map<string, number | undefined>();
+  meta = new Map<string, unknown>();
   puts: string[] = [];
   failPutsFor: string | null = null;
   async get(key: string): Promise<string | null> {
     return this.data.get(key) ?? null;
   }
-  async put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> {
+  async put(key: string, value: string, options?: { expirationTtl?: number; metadata?: unknown }): Promise<void> {
     if (this.failPutsFor === key) throw new Error(`KV put failed: ${key}`);
     this.puts.push(key);
     this.data.set(key, value);
     this.ttls.set(key, options?.expirationTtl);
+    if (options?.metadata !== undefined) {
+      // KV refuses metadata over 1024 bytes.
+      if (new TextEncoder().encode(JSON.stringify(options.metadata)).length > 1024) throw new Error("metadata too large");
+      this.meta.set(key, JSON.parse(JSON.stringify(options.metadata)));
+    }
+  }
+  /** Keys in ascending order, like KV. */
+  async list(options: { prefix: string; limit: number }): Promise<{ keys: { name: string; metadata?: unknown }[] }> {
+    const names = [...this.data.keys()].filter((k) => k.startsWith(options.prefix)).sort();
+    return { keys: names.slice(0, options.limit).map((name) => ({ name, metadata: this.meta.get(name) })) };
   }
   json<T>(key: string): T {
     return JSON.parse(this.data.get(key) ?? "null") as T;
+  }
+  /** Every stored alert, newest first. */
+  alerts(): Alert[] {
+    return [...this.data.keys()].filter((k) => k.startsWith("alert:")).sort().map((k) => this.meta.get(k) as Alert);
   }
 }
 
