@@ -74,6 +74,9 @@ apply_defaults() {
   : "${CF_API_TOKEN:=}"
   : "${CF_ZONE_ID:=}"
   : "${NTFY_URL:=}"
+  # The alert relay of the iPhone app (docs/APP.md). Both or neither.
+  : "${CASAVPN_RELAY_URL:=}"
+  : "${CASAVPN_RELAY_TOKEN:=}"
   : "${AGE_RECIPIENT:=}"
   : "${CASAVPN_ACME_EMAIL:=}"
   : "${CASAVPN_BACKUP_GROUP:=}"
@@ -127,6 +130,10 @@ validate_env() {
   case "$CASAVPN_DDNS_PROVIDER" in cloudflare) ;; *) complain "CASAVPN_DDNS_PROVIDER '$CASAVPN_DDNS_PROVIDER' is unknown (cloudflare)" ;; esac
   if [ -n "$AGE_RECIPIENT" ] && ! [[ "$AGE_RECIPIENT" =~ ^age1[a-z0-9]{50,}$ ]]; then complain "AGE_RECIPIENT is not an age public key (age1...)"; fi
   if [ -n "$CF_API_TOKEN" ] && [ -z "$CF_ZONE_ID" ]; then complain "CF_API_TOKEN is set but CF_ZONE_ID is not"; fi
+  if [ -n "$CASAVPN_RELAY_URL" ] && ! [[ "$CASAVPN_RELAY_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$ ]]; then complain "CASAVPN_RELAY_URL is not an https:// URL: $CASAVPN_RELAY_URL"; fi
+  if [ -n "$CASAVPN_RELAY_URL" ] && [ -z "$CASAVPN_RELAY_TOKEN" ]; then complain "CASAVPN_RELAY_URL is set but CASAVPN_RELAY_TOKEN (the host token) is not"; fi
+  if [ -z "$CASAVPN_RELAY_URL" ] && [ -n "$CASAVPN_RELAY_TOKEN" ]; then complain "CASAVPN_RELAY_TOKEN is set but CASAVPN_RELAY_URL is not"; fi
+  if [ -n "$CASAVPN_RELAY_TOKEN" ] && [[ "$CASAVPN_RELAY_TOKEN" =~ [^A-Za-z0-9._~+/=-] ]]; then complain "CASAVPN_RELAY_TOKEN has characters a token should not have (letters, digits and . _ ~ + / = - only)"; fi
   [ "$bad" = 0 ] || die "fix the settings above in $ENV_FILE and run again"
 }
 

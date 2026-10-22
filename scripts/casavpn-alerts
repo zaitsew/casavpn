@@ -1,0 +1,331 @@
+#!/usr/bin/env bash
+#
+# casavpn-alerts — one pass over the things on this host that should reach your
+# phone. casavpn-alerts.timer runs it every 15 minutes.
+#
+# Checks, with the thresholds of docs/APP.md ("Alerts"):
+#   cert.expiring     the web certificate (Let's Encrypt, the one nginx serves)
+#                     has under 14 days left (critical under 3 days or expired)
+#   client.traffic    a client with a traffic limit used 90 % (warning) or all
+#                     of it (critical)
+#   client.expiring   a client with an expiry date has under 3 days left
+#                     (warning), or expired within the last 24 h (critical)
+#   xray.down         x-ui runs but nothing listens on the VPN port
+#   backup.stale      the newest backup is older than 36 h
+#   disk.low          the root filesystem is over 90 % full
+#   host.rebooted     the host booted since the last run (info)
+#
+# Every event carries a dedupe key, so a condition that lasts is delivered once
+# per 6 h window instead of every 15 minutes (the relay enforces the window; ntfy
+# gets the same limit from the sender, scripts/lib/casavpn-notify.sh):
+#   cert.expiring:<notAfter day>            ...:crit for the critical level
+#   client.traffic:<email>:90 | :100
+#   client.expiring:<email>:<expiry day>    ...:expired once it has expired
+#   xray.down  disk.low
+#   backup.stale:<day of the newest backup | none>
+#   host.rebooted:<boot id>
+#
+# Settings are read from /etc/casavpn/casavpn.env (parsed, never sourced):
+#   CASAVPN_DOMAIN, CASAVPN_VPN_PORT, AGE_RECIPIENT (backups on?),
+#   CASAVPN_RELAY_URL + CASAVPN_RELAY_TOKEN (the relay, docs/APP.md), NTFY_URL.
+# With neither the relay nor ntfy set there is nowhere to send to: the script
+# says so and exits 0 without looking at anything.
+#
+# Usage: casavpn-alerts [--dry-run]
+#   --dry-run   run every check and print the events; send nothing, write nothing
+#
+# Exit codes: 0 done (events sent or none due), 1 a check or a delivery failed
+# (the systemd unit then shows as failed), 2 usage.
+#
+# Test hooks (every path and command can be replaced; the tests use PATH stubs
+# for openssl, ss, systemctl, df and curl):
+#   CASAVPN_ENV_FILE            settings file (default /etc/casavpn/casavpn.env)
+#   CASAVPN_ALERTS_STATE_DIR    default /var/lib/casavpn
+#   CASAVPN_DB                  the 3x-ui database (default /etc/x-ui/x-ui.db)
+#   CASAVPN_LE_DIR              default /etc/letsencrypt
+#   CASAVPN_ALERTS_CERT         the certificate file (default <LE>/live/<domain>/fullchain.pem)
+#   CASAVPN_BACKUP_DEST         default /var/backups/casavpn
+#   CASAVPN_BACKUP_GLOB         backup file pattern (default casavpn-*.tar.*)
+#   CASAVPN_ALERTS_BOOT_ID_FILE default /proc/sys/kernel/random/boot_id
+#   CASAVPN_ALERTS_DF_PATH      default /
+#   CASAVPN_ALERTS_NOW          the current time as a Unix timestamp
+#   CASAVPN_LIB_DIR             where casavpn-notify.sh and host_probe.py live
+#
+# Bash 3.2 compatible, so the offline tests also run on a Mac.
+
+set -u -o pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${CASAVPN_ENV_FILE:-/etc/casavpn/casavpn.env}"
+STATE_DIR="${CASAVPN_ALERTS_STATE_DIR:-/var/lib/casavpn}"
+DB="${CASAVPN_DB:-/etc/x-ui/x-ui.db}"
+LE_DIR="${CASAVPN_LE_DIR:-/etc/letsencrypt}"
+BACKUP_DEST="${CASAVPN_BACKUP_DEST:-/var/backups/casavpn}"
+BOOT_ID_FILE="${CASAVPN_ALERTS_BOOT_ID_FILE:-/proc/sys/kernel/random/boot_id}"
+DF_PATH="${CASAVPN_ALERTS_DF_PATH:-/}"
+NOW="${CASAVPN_ALERTS_NOW:-$(date +%s)}"
+
+# The thresholds of docs/APP.md. Changing one means changing that table too.
+CERT_WARN_DAYS=14
+CERT_CRIT_DAYS=3
+TRAFFIC_WARN_PCT=90
+EXPIRY_WARN_DAYS=3
+EXPIRED_GRACE_HOURS=24   # an expired client alerts for a day, not for ever (the panel switches it off)
+BACKUP_MAX_HOURS=36
+DISK_MAX_PCT=90
+
+CASAVPN_DOMAIN="${CASAVPN_DOMAIN:-}"
+CASAVPN_VPN_PORT="${CASAVPN_VPN_PORT:-}"
+AGE_RECIPIENT="${AGE_RECIPIENT:-}"
+CASAVPN_RELAY_URL="${CASAVPN_RELAY_URL:-}"
+CASAVPN_RELAY_TOKEN="${CASAVPN_RELAY_TOKEN:-}"
+NTFY_URL="${NTFY_URL:-}"
+
+DRY_RUN=0
+EVENTS=0       # events handed to the sender
+FAILURES=0     # deliveries and checks that failed
+PROBE=""
+
+log() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"; }
+err() { printf '%s ERROR: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >&2; }
+usage() { awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "${BASH_SOURCE[0]}"; }
+
+# find_lib <file>: next to the repo's scripts (scripts/lib), or where install.sh puts it.
+find_lib() {
+  local d
+  for d in "${CASAVPN_LIB_DIR:-}" "$HERE/lib" /usr/local/lib/casavpn; do
+    if [ -n "$d" ] && [ -r "$d/$1" ]; then printf '%s' "$d/$1"; return 0; fi
+  done
+  return 1
+}
+
+# --- helpers ---------------------------------------------------------------------
+
+probe() { python3 -I "$PROBE" "$@"; }
+
+# human_bytes <bytes>: 46.0 GB
+human_bytes() { awk -v b="$1" 'BEGIN { printf "%.1f GB", b / 1073741824 }'; }
+
+# mk_key <kind> <who> <suffix>: kind:who:suffix, at most 64 characters (the relay's
+# limit). A long client name is cut and given a checksum, so two long names that
+# share a prefix still get different keys.
+mk_key() {
+  local kind="$1" who="$2" suffix="$3" key sum keep
+  key="$kind:$who:$suffix"
+  if [ "${#key}" -gt 64 ]; then
+    sum="$(printf '%s' "$who" | cksum | cut -d' ' -f1)"
+    keep=$((64 - ${#kind} - ${#suffix} - ${#sum} - 3))
+    key="$kind:${who:0:$keep}~$sum:$suffix"
+  fi
+  printf '%s' "$key"
+}
+
+# emit <kind> <severity> <title> <body> <dedupe>: hand one event to the sender.
+# Returns its result, so a check can keep its bookkeeping honest.
+emit() {
+  local rc=0
+  EVENTS=$((EVENTS + 1))
+  log "ALERT[$5] $2 $1: $3"
+  casavpn_notify "$1" "$2" "$3" "$4" "$5" || rc=$?
+  if [ "$rc" -ne 0 ]; then FAILURES=$((FAILURES + 1)); err "delivery failed for '$5' (code $rc)"; fi
+  return "$rc"
+}
+
+write_state() { # <file> <value>: atomic; a no-op under --dry-run
+  [ "$DRY_RUN" = 0 ] || return 0
+  local tmp
+  tmp="$(mktemp "$STATE_DIR/.tmp.XXXXXX")" || return 1
+  if printf '%s\n' "$2" >"$tmp" && mv -f "$tmp" "$STATE_DIR/$1"; then return 0; fi
+  rm -f "$tmp"; return 1
+}
+read_state() { cat "$STATE_DIR/$1" 2>/dev/null || true; }
+
+# --- checks ----------------------------------------------------------------------
+
+check_cert() {
+  local file end parsed epoch day left days sev title key
+  file="${CASAVPN_ALERTS_CERT:-}"
+  if [ -z "$file" ]; then
+    [ -n "$CASAVPN_DOMAIN" ] || { log "cert: CASAVPN_DOMAIN is not set; skipped"; return 0; }
+    file="$LE_DIR/live/$CASAVPN_DOMAIN/fullchain.pem"
+  fi
+  [ -r "$file" ] || { log "cert: $file does not exist yet; skipped"; return 0; }
+  end="$(openssl x509 -noout -enddate -in "$file" 2>/dev/null | sed -n 's/^notAfter=//p')"
+  [ -n "$end" ] || { err "cert: openssl could not read $file"; return 1; }
+  parsed="$(probe certdate "$end")" || return 1
+  read -r epoch day <<<"$parsed"
+  left=$((epoch - NOW))
+  [ "$left" -lt $((CERT_WARN_DAYS * 86400)) ] || { log "cert: $day, $((left / 86400)) days left; ok"; return 0; }
+  days=$((left / 86400))
+  if [ "$left" -le 0 ]; then
+    sev=critical; title="Certificate expired"; key="cert.expiring:$day:crit"
+  elif [ "$left" -lt $((CERT_CRIT_DAYS * 86400)) ]; then
+    sev=critical; key="cert.expiring:$day:crit"
+    if [ "$days" -lt 1 ]; then title="Certificate expires in under a day"; else title="Certificate expires in $days days"; fi
+  else
+    sev=warning; title="Certificate expires in $days days"; key="cert.expiring:$day"
+  fi
+  emit cert.expiring "$sev" "$title" \
+    "The web certificate for ${CASAVPN_DOMAIN:-this host} expires on $day. Renewal is not working: run 'sudo certbot renew --dry-run' and read the error." "$key" || true
+}
+
+check_clients() {
+  local rows email enable up down total expiry_ms day used pct left_ms n=0
+  [ -r "$DB" ] || { log "clients: $DB is not readable; skipped"; return 0; }
+  rows="$(probe clients "$DB")" || { err "clients: could not read the client list from $DB"; return 1; }
+  while IFS=$'\t' read -r email enable up down total expiry_ms day; do
+    [ -n "$email" ] || continue
+    n=$((n + 1))
+    # Traffic. total 0 means unlimited. A client the panel switched off at its
+    # limit is still reported at 100 %; one switched off by hand is not nagged at 90 %.
+    if [ "$total" -gt 0 ]; then
+      used=$((up + down)); pct=$((used * 100 / total))
+      if [ "$used" -ge "$total" ]; then
+        emit client.traffic critical "$email used all of its traffic" \
+          "$email has used $(human_bytes "$used") of its $(human_bytes "$total") limit. The panel switches a client off at its limit." \
+          "$(mk_key client.traffic "$email" 100)" || true
+      elif [ "$enable" = 1 ] && [ $((used * 100)) -ge $((total * TRAFFIC_WARN_PCT)) ]; then
+        emit client.traffic warning "$email used $pct % of its traffic" \
+          "$email has used $(human_bytes "$used") of its $(human_bytes "$total") limit." \
+          "$(mk_key client.traffic "$email" "$TRAFFIC_WARN_PCT")" || true
+      fi
+    fi
+    # Expiry. 0 means none; a negative value means "starts on first use": no date yet.
+    if [ "$expiry_ms" -gt 0 ]; then
+      left_ms=$((expiry_ms - NOW * 1000))
+      if [ "$left_ms" -le 0 ]; then
+        if [ $((-left_ms)) -le $((EXPIRED_GRACE_HOURS * 3600000)) ]; then
+          emit client.expiring critical "$email has expired" \
+            "$email expired on $day and the panel has switched it off. Extend the expiry date in the panel to restore access." \
+            "$(mk_key client.expiring "$email" "$day:expired")" || true
+        fi
+      elif [ "$enable" = 1 ] && [ "$left_ms" -lt $((EXPIRY_WARN_DAYS * 86400000)) ]; then
+        emit client.expiring warning "$email expires on $day" \
+          "$email has under $EXPIRY_WARN_DAYS days left (expires on $day, UTC)." \
+          "$(mk_key client.expiring "$email" "$day")" || true
+      fi
+    fi
+  done <<<"$rows"
+  log "clients: $n checked"
+}
+
+check_xray() {
+  local port="${CASAVPN_VPN_PORT:-443}" n
+  [[ "$port" =~ ^[0-9]{1,5}$ ]] || { err "xray: CASAVPN_VPN_PORT '$port' is not a port"; return 1; }
+  if ! systemctl is-active --quiet x-ui; then log "xray: x-ui is not running; the Worker reports a dead VPN port"; return 0; fi
+  if ss -ltn 2>/dev/null | awk -v port="$port" '$1 == "LISTEN" && $4 ~ (":" port "$") { found = 1 } END { exit !found }'; then
+    log "xray: port $port is listening; ok"; return 0
+  fi
+  # A fresh install runs x-ui before the first inbound exists: nothing should listen yet.
+  if [ -r "$DB" ]; then
+    n="$(probe inbound "$DB" "$port" 2>/dev/null)" || n=1
+    if [ "$n" = 0 ]; then log "xray: no enabled inbound on port $port yet; skipped"; return 0; fi
+  fi
+  emit xray.down critical "Xray is not listening on port $port" \
+    "x-ui is running but nothing listens on port $port, so the VPN is down. Check: sudo journalctl -u x-ui -n 50. Restart: sudo systemctl restart x-ui" \
+    "xray.down" || true
+}
+
+check_backup() {
+  local found ref day first age_h body
+  found="$(probe newest "$BACKUP_DEST" 2>/dev/null)" || found=""
+  if [ -n "$found" ]; then
+    read -r ref day <<<"$found"
+    body="The newest backup in $BACKUP_DEST is"
+  else
+    # No backup yet: that is stale only when backups are on, and only once the
+    # first one is overdue (the timer runs at 03:30).
+    if [ -z "$AGE_RECIPIENT" ] && [ ! -d "$BACKUP_DEST" ]; then log "backup: backups are not enabled (AGE_RECIPIENT is empty); skipped"; return 0; fi
+    first="$(read_state alerts-first-run)"
+    [[ "$first" =~ ^[0-9]+$ ]] || first="$NOW"
+    ref="$first"; day="none"
+    body="No backup exists in $BACKUP_DEST, and the first check ran"
+  fi
+  if [ $((NOW - ref)) -le $((BACKUP_MAX_HOURS * 3600)) ]; then log "backup: newest is $day; ok"; return 0; fi
+  age_h=$(((NOW - ref) / 3600))
+  emit backup.stale warning "Backup is $age_h hours old" \
+    "$body $age_h hours ago (limit $BACKUP_MAX_HOURS). Run 'sudo systemctl start casavpn-backup.service' and read: sudo journalctl -u casavpn-backup.service -n 30" \
+    "backup.stale:$day" || true
+}
+
+check_disk() {
+  local used
+  used="$(df -P "$DF_PATH" 2>/dev/null | awk 'NR == 2 { gsub(/%/, "", $5); print $5 }')"
+  [[ "$used" =~ ^[0-9]+$ ]] || { err "disk: could not read the usage of $DF_PATH"; return 1; }
+  if [ "$used" -le "$DISK_MAX_PCT" ]; then log "disk: $used % used; ok"; return 0; fi
+  emit disk.low warning "Disk is $used % full" \
+    "The root filesystem is $used % full (limit $DISK_MAX_PCT %). Free space: sudo journalctl --vacuum-size=100M && sudo apt-get clean" \
+    "disk.low" || true
+}
+
+check_reboot() {
+  local id last
+  id="$(tr -d '[:space:]' <"$BOOT_ID_FILE" 2>/dev/null)"
+  [ -n "$id" ] || { err "reboot: cannot read $BOOT_ID_FILE"; return 1; }
+  last="$(read_state alerts-boot-id)"
+  if [ -z "$last" ]; then
+    log "reboot: first run; recording boot id"
+    write_state alerts-boot-id "$id"
+    return 0
+  fi
+  [ "$last" != "$id" ] || return 0
+  # The new boot id is stored only after the push was delivered, so a failed push
+  # is retried on the next run instead of being lost.
+  if emit host.rebooted info "Host rebooted" \
+       "The VPN host booted since the last check. If you did not expect it: sudo journalctl -b -1 -e" \
+       "host.rebooted:$id"; then
+    write_state alerts-boot-id "$id"
+  fi
+}
+
+# run_check <name>: a failing check is reported and the others still run.
+run_check() {
+  if ! "check_$1"; then FAILURES=$((FAILURES + 1)); err "check '$1' failed"; fi
+}
+
+main() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      --dry-run) DRY_RUN=1 ;;
+      -h|--help) usage; exit 0 ;;
+      *) echo "unknown argument: $arg" >&2; usage >&2; exit 2 ;;
+    esac
+  done
+  local lib
+  lib="$(find_lib casavpn-notify.sh)" || { err "casavpn-notify.sh not found (looked next to this script and in /usr/local/lib/casavpn)"; exit 1; }
+  # shellcheck source=lib/casavpn-notify.sh
+  . "$lib"
+  PROBE="$(find_lib host_probe.py)" || { err "host_probe.py not found next to casavpn-notify.sh"; exit 1; }
+  for arg in python3 jq curl; do
+    command -v "$arg" >/dev/null 2>&1 || { err "$arg is not installed (apt install python3 jq curl)"; exit 1; }
+  done
+  casavpn_env_load "$ENV_FILE" CASAVPN_DOMAIN CASAVPN_VPN_PORT AGE_RECIPIENT CASAVPN_RELAY_URL CASAVPN_RELAY_TOKEN NTFY_URL \
+    || log "cannot read $ENV_FILE; using the environment only"
+
+  if [ "$DRY_RUN" = 1 ]; then
+    CASAVPN_NOTIFY_DRY_RUN=1; export CASAVPN_NOTIFY_DRY_RUN
+  elif [ -z "$NTFY_URL" ] && { [ -z "$CASAVPN_RELAY_URL" ] || [ -z "$CASAVPN_RELAY_TOKEN" ]; }; then
+    log "no alert channel: set CASAVPN_RELAY_URL and CASAVPN_RELAY_TOKEN (or NTFY_URL) in $ENV_FILE; nothing checked"
+    exit 0
+  else
+    mkdir -p "$STATE_DIR" || { err "cannot create $STATE_DIR"; exit 1; }
+    chmod 700 "$STATE_DIR" 2>/dev/null || true
+    CASAVPN_NOTIFY_STATE_DIR="$STATE_DIR"; export CASAVPN_NOTIFY_STATE_DIR
+    [ -e "$STATE_DIR/alerts-first-run" ] || write_state alerts-first-run "$NOW"
+    # Repeat-limit files of ntfy keys that have not been used for a week.
+    find "$STATE_DIR" -maxdepth 1 -name 'ntfy-*' -mtime +7 -delete 2>/dev/null || true
+  fi
+
+  run_check cert
+  run_check clients
+  run_check xray
+  run_check backup
+  run_check disk
+  run_check reboot
+
+  log "done: $EVENTS event(s), $FAILURES failure(s)"
+  [ "$FAILURES" -eq 0 ]
+}
+
+main "$@"

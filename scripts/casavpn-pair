@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+#
+# casavpn-pair — print the pairing code for the CasaVPN iPhone app: a
+# casavpn://pair?... link and the same link as a QR code in the terminal.
+#
+#   sudo casavpn-pair             make a panel API token and print the code
+#   sudo casavpn-pair --yes       also replace the token of an earlier pairing
+#
+# The code carries five values (docs/APP.md, "The app"); the app stores them in
+# the iPhone Keychain:
+#   panel        https://<CASAVPN_DOMAIN>:<CASAVPN_WEB_PORT>/<panel base path>
+#                (the base path is read from the panel database)
+#   panelToken   a 3x-ui API token. Made here with the panel's own command line:
+#                  x-ui setting -getApiToken -tokenName casavpn-app -tokenScope admin
+#                3x-ui keeps only a hash of a token, so an existing one cannot be
+#                shown again: when the token "casavpn-app" exists it is REPLACED,
+#                and the phone paired earlier stops working. That needs --yes (or
+#                an answer at the prompt). To use a token you made in the panel
+#                (Settings > API tokens) set CASAVPN_PANEL_TOKEN instead; nothing
+#                is created then. An admin token unlocks the Clients tab; a
+#                monitor token gives the Status tab only.
+#   relay        CASAVPN_RELAY_URL from casavpn.env
+#   relayToken   the relay's APP token, from CASAVPN_RELAY_APP_TOKEN or asked at
+#                the prompt. It lives as a Worker secret (APP_TOKEN); this host
+#                does not store it, and the host token in casavpn.env is a
+#                different secret that the app must not have.
+#   sub          https://<CASAVPN_DOMAIN>:<CASAVPN_WEB_PORT>/sub/
+#
+# THE CODE CONTAINS SECRETS: whoever scans it can read the panel's clients and
+# the alert history. Scan it, then clear the screen. Do not paste it into a chat,
+# a ticket or a screenshot.
+#
+# Output: the link on stdout; the warning and the QR code on stderr.
+#   --no-qr     print the link only
+#   --yes, -y   replace the token of an earlier pairing without asking
+#
+# Settings (from /etc/casavpn/casavpn.env, parsed, never sourced; the
+# environment wins): CASAVPN_DOMAIN, CASAVPN_WEB_PORT (default 8443),
+# CASAVPN_RELAY_URL. Needs root: it reads the panel database and runs x-ui.
+#
+# Test hooks: CASAVPN_ENV_FILE, CASAVPN_DB, CASAVPN_PANEL_CREDS, CASAVPN_XUI_DIR,
+# CASAVPN_LIB_DIR, CASAVPN_PAIR_ALLOW_NONROOT=1.
+#
+# Exit codes: 0 done, 1 something is missing (the message says what), 2 usage.
+
+set -u -o pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${CASAVPN_ENV_FILE:-/etc/casavpn/casavpn.env}"
+DB="${CASAVPN_DB:-/etc/x-ui/x-ui.db}"
+CRED_FILE="${CASAVPN_PANEL_CREDS:-/etc/casavpn/panel-credentials.env}"
+XUI_DIR="${CASAVPN_XUI_DIR:-/usr/local/x-ui}"
+TOKEN_NAME="casavpn-app"
+
+CASAVPN_DOMAIN="${CASAVPN_DOMAIN:-}"
+CASAVPN_WEB_PORT="${CASAVPN_WEB_PORT:-}"
+CASAVPN_RELAY_URL="${CASAVPN_RELAY_URL:-}"
+CASAVPN_PANEL_TOKEN="${CASAVPN_PANEL_TOKEN:-}"
+CASAVPN_RELAY_APP_TOKEN="${CASAVPN_RELAY_APP_TOKEN:-}"
+
+ASSUME_YES=0
+SHOW_QR=1
+
+err() { printf 'casavpn-pair: %s\n' "$*" >&2; }
+die() { err "$*"; exit 1; }
+usage() { awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "${BASH_SOURCE[0]}" >&2; }
+
+find_lib() {
+  local d
+  for d in "${CASAVPN_LIB_DIR:-}" "$HERE/lib" /usr/local/lib/casavpn; do
+    if [ -n "$d" ] && [ -r "$d/$1" ]; then printf '%s' "$d/$1"; return 0; fi
+  done
+  return 1
+}
+
+# ask_secret <prompt>: read a value from the terminal without echoing it.
+ask_secret() {
+  local v=""
+  # -r is true for /dev/tty even with no controlling terminal; opening it is the real test.
+  { : </dev/tty; } 2>/dev/null || return 1
+  printf '%s' "$1" >/dev/tty
+  IFS= read -rs v </dev/tty || true
+  printf '\n' >/dev/tty
+  printf '%s' "$v"
+}
+
+# panel_base_path: the secret path the panel is served under. The database is the
+# truth (it can change in the panel); the credentials file install.sh wrote is the fallback.
+panel_base_path() {
+  local b=""
+  if [ -r "$DB" ]; then b="$(python3 -I "$PROBE" setting "$DB" webBasePath 2>/dev/null || true)"; fi
+  if [ -z "${b//\//}" ] && [ -r "$CRED_FILE" ]; then b="$(grep -E '^PANEL_BASE_PATH=' "$CRED_FILE" | tail -n1 | cut -d= -f2-)"; fi
+  b="${b#/}"; b="${b%/}"
+  [[ "$b" =~ ^[A-Za-z0-9._~-]+$ ]] || return 1
+  printf '%s' "$b"
+}
+
+# make_panel_token: create (or replace) the admin token "casavpn-app" with 3x-ui's
+# own command line and print the token. The command prints "apiToken: <token>".
+make_panel_token() {
+  local bin="$XUI_DIR/x-ui" out tok exists=0
+  [ -x "$bin" ] || die "$bin not found. Make an API token in the panel (Settings > API tokens) and run: CASAVPN_PANEL_TOKEN=<token> casavpn-pair"
+  if [ -r "$DB" ]; then exists="$(python3 -I "$PROBE" token-exists "$DB" "$TOKEN_NAME" 2>/dev/null || echo 0)"; fi
+  if [ "$exists" = 1 ] && [ "$ASSUME_YES" -ne 1 ]; then
+    err "the panel already has an API token named '$TOKEN_NAME'. 3x-ui cannot show it again, so a new one"
+    err "would REPLACE it, and the phone paired earlier would stop working until it is paired again."
+    if [ -t 0 ]; then
+      printf 'Replace it? [y/N] ' >&2
+      read -r ans || ans=""
+      case "$ans" in y|Y|yes|YES) ;; *) die "nothing was changed" ;; esac
+    else
+      die "nothing was changed; run it again with --yes to replace the token"
+    fi
+  fi
+  # The flags go BEFORE the value-less -getApiToken: Go's flag parser stops at the
+  # first positional argument and would silently drop -tokenName after "true".
+  out="$("$bin" setting -getApiToken -tokenName "$TOKEN_NAME" -tokenScope admin 2>&1)" \
+    || die "'x-ui setting -getApiToken' failed: $out"
+  tok="$(sed -n 's/^apiToken: *//p' <<<"$out" | head -n1 | tr -d '[:space:]')"
+  [[ "$tok" =~ ^[A-Za-z0-9._~-]{16,}$ ]] || die "could not read a token from the output of 'x-ui setting -getApiToken': $(tr '\n' ' ' <<<"$out" | cut -c1-200)"
+  printf '%s' "$tok"
+}
+
+main() {
+  local arg lib base panel sub relay panel_token app_token link
+  for arg in "$@"; do
+    case "$arg" in
+      --yes|-y) ASSUME_YES=1 ;;
+      --no-qr) SHOW_QR=0 ;;
+      -h|--help) usage; exit 0 ;;
+      *) err "unknown argument: $arg"; usage; exit 2 ;;
+    esac
+  done
+  if [ "$(id -u)" -ne 0 ] && [ "${CASAVPN_PAIR_ALLOW_NONROOT:-0}" != 1 ]; then
+    die "run it as root (it reads the panel database and runs x-ui): sudo casavpn-pair"
+  fi
+  lib="$(find_lib casavpn-notify.sh)" || die "casavpn-notify.sh not found (looked next to this script and in /usr/local/lib/casavpn)"
+  # shellcheck source=lib/casavpn-notify.sh
+  . "$lib"
+  PROBE="$(find_lib host_probe.py)" || die "host_probe.py not found next to casavpn-notify.sh"
+  command -v python3 >/dev/null 2>&1 || die "python3 is not installed (apt install python3)"
+  casavpn_env_load "$ENV_FILE" CASAVPN_DOMAIN CASAVPN_WEB_PORT CASAVPN_RELAY_URL CASAVPN_RELAY_TOKEN \
+    || err "cannot read $ENV_FILE; using the environment only"
+
+  # Everything that can be wrong without side effects comes first, so a failure
+  # never leaves a freshly replaced panel token unused.
+  [ -n "$CASAVPN_DOMAIN" ] || die "CASAVPN_DOMAIN is not set in $ENV_FILE"
+  [[ "$CASAVPN_DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]] || die "CASAVPN_DOMAIN '$CASAVPN_DOMAIN' is not a host name"
+  : "${CASAVPN_WEB_PORT:=8443}"
+  [[ "$CASAVPN_WEB_PORT" =~ ^[0-9]{1,5}$ ]] || die "CASAVPN_WEB_PORT '$CASAVPN_WEB_PORT' is not a port"
+  [ -n "$CASAVPN_RELAY_URL" ] || die "CASAVPN_RELAY_URL is not set in $ENV_FILE: deploy the relay first (docs/APP.md, Setup)"
+  [[ "$CASAVPN_RELAY_URL" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$ ]] || die "CASAVPN_RELAY_URL must be an https:// URL, not '$CASAVPN_RELAY_URL'"
+  relay="${CASAVPN_RELAY_URL%/}"
+  base="$(panel_base_path)" || die "cannot find the panel's base path (not in $DB, not in $CRED_FILE)"
+
+  app_token="$CASAVPN_RELAY_APP_TOKEN"
+  if [ -z "$app_token" ]; then
+    app_token="$(ask_secret "Relay APP token (the Worker's APP_TOKEN secret; typing is hidden): ")" \
+      || die "no terminal to ask on: set CASAVPN_RELAY_APP_TOKEN"
+  fi
+  app_token="${app_token//[[:space:]]/}"
+  [ -n "$app_token" ] || die "the relay APP token is empty"
+  if [ "$app_token" = "${CASAVPN_RELAY_TOKEN:-}" ]; then
+    die "that is the HOST token. The app needs the APP token, a different Worker secret (docs/APP.md)"
+  fi
+
+  panel_token="${CASAVPN_PANEL_TOKEN//[[:space:]]/}"
+  if [ -z "$panel_token" ]; then panel_token="$(make_panel_token)" || exit 1; fi
+
+  panel="https://$CASAVPN_DOMAIN:$CASAVPN_WEB_PORT/$base"
+  sub="https://$CASAVPN_DOMAIN:$CASAVPN_WEB_PORT/sub/"
+  # The secrets travel on stdin (printf is a shell builtin), never in argv.
+  link="$(printf 'panel=%s\npanelToken=%s\nrelay=%s\nrelayToken=%s\nsub=%s\n' "$panel" "$panel_token" "$relay" "$app_token" "$sub" \
+    | python3 -I "$PROBE" pair-link)" || die "could not build the pairing link"
+
+  {
+    echo
+    echo "WARNING: this code contains secrets (a panel API token and the relay APP token)."
+    echo "Scan it with the CasaVPN app (Settings > Scan pairing code), then clear this screen."
+    echo "Do not paste it into a chat or a ticket, or take a screenshot of it."
+    echo
+  } >&2
+  if [ "$SHOW_QR" = 1 ]; then
+    if command -v qrencode >/dev/null 2>&1; then
+      # No string argument: qrencode reads the text from stdin, so the link stays out of argv.
+      printf '%s' "$link" | qrencode -t ANSIUTF8 -m 2 >&2 || err "qrencode failed; use the link below"
+    else
+      err "qrencode is not installed (sudo apt-get install qrencode): paste the link into the app instead"
+    fi
+    echo >&2
+  fi
+  printf '%s\n' "$link"
+}
+
+main "$@"

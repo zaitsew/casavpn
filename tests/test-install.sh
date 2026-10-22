@@ -49,6 +49,13 @@ expect "prints the inbound guide with the configured ports" 0 "Port             
 expect "prints the router step with both ports" 0 "443  (the VPN)      8443  (client subscriptions)"
 expect "tells the user not to forward SSH or the panel" 0 "Do not forward 22, 2053 or 2096"
 lacks  "never prints a credential" "PANEL_PASSWORD="
+expect "installs the alerts script and its two helpers" 0 "would install /usr/local/bin/casavpn-alerts"
+expect "  ...the sender library" 0 "would install /usr/local/lib/casavpn/casavpn-notify.sh"
+expect "  ...and the database probe" 0 "would install /usr/local/lib/casavpn/host_probe.py"
+expect "installs the pairing script" 0 "would install /usr/local/bin/casavpn-pair"
+expect "installs the alerts timer next to the others" 0 "casavpn-alerts.timer"
+expect "plans the alerts timer only when a channel is set" 0 "casavpn-alerts.timer if CASAVPN_RELAY_URL"
+expect "needs qrencode for the pairing code" 0 "qrencode"
 OUT="$("$INSTALL" --dry-run --env "$T/ok.env" --skip-firewall --skip-ssh --skip-3xui 2>&1)"; RC=$?
 expect "--skip-* leaves the step out" 0 "dry run finished"
 lacks  "  ...firewall step absent" "== Firewall"
@@ -74,6 +81,14 @@ OUT="$("$INSTALL" --dry-run --env "$T/notarget.env" 2>&1)"; RC=$?
 expect "an empty Reality target is refused" 1 "CASAVPN_REALITY_TARGET is empty"
 expect "  ...with a pointer to the doc" 1 "docs/REALITY-TARGET.md"
 bad_env "a Reality target that is not a hostname is rejected" "CASAVPN_REALITY_TARGET is not a hostname" 'CASAVPN_REALITY_TARGET=bad host'
+bad_env "a relay URL without the host token is refused" "CASAVPN_RELAY_URL is set but CASAVPN_RELAY_TOKEN" 'CASAVPN_RELAY_URL=https://relay.example.com'
+bad_env "a relay token without the URL is refused" "CASAVPN_RELAY_TOKEN is set but CASAVPN_RELAY_URL" 'CASAVPN_RELAY_TOKEN=abc123'
+bad_env "a plain-http relay URL is refused" "CASAVPN_RELAY_URL is not an https:// URL" 'CASAVPN_RELAY_URL=http://relay.example.com' 'CASAVPN_RELAY_TOKEN=abc123'
+bad_env "a relay token with a quote is refused" "CASAVPN_RELAY_TOKEN has characters" 'CASAVPN_RELAY_URL=https://relay.example.com' 'CASAVPN_RELAY_TOKEN=ab"c'
+good_env "$T/relay.env" CASAVPN_RELAY_URL=https://relay.example.com CASAVPN_RELAY_TOKEN=hosttoken123
+OUT="$("$INSTALL" --dry-run --env "$T/relay.env" 2>&1)"; RC=$?
+expect "a relay URL with a token is accepted" 0 "dry run finished"
+lacks  "  ...and the token is not printed" "hosttoken123"
 good_env "$T/port.env" CASAVPN_VPN_PORT=4443
 OUT="$("$INSTALL" --dry-run --env "$T/port.env" 2>&1)"; RC=$?
 expect "a non-443 VPN port is allowed but warned about" 0 "not 443"

@@ -44,6 +44,28 @@ ntfy stays an optional second channel for the host scripts.
 
 Critical alerts are delivered as time-sensitive notifications.
 
+How `casavpn-alerts` fills in the table (it runs every 15 minutes; the relay
+suppresses a repeated `dedupe` key for 6 hours, and the script gives ntfy the same
+6-hour limit itself, because ntfy has no dedupe):
+
+| kind | reads | dedupe key |
+|---|---|---|
+| `cert.expiring` | the end date of `/etc/letsencrypt/live/<domain>/fullchain.pem` | `cert.expiring:<expiry day>`, and `:crit` at under 3 days or expired, so the escalation is not swallowed |
+| `client.traffic` | `client_traffics` in the 3x-ui database (read-only). A limit of 0 means unlimited. 90 % warns only an enabled client; 100 % is critical whether or not the panel has disabled it | `client.traffic:<email>:90` / `:100` |
+| `client.expiring` | the same table, `expiry_time`. Zero or negative means no expiry. A warning needs an enabled client. An expired client alerts for 24 h after the expiry, because the panel disables it and it would otherwise repeat for ever | `client.expiring:<email>:<expiry day>` / `:expired` |
+| `xray.down` | `systemctl is-active x-ui` and `ss -ltn` for the VPN inbound's port. Skipped when x-ui itself is down (the Worker reports that) and when the database has no enabled inbound on that port (a fresh install) | `xray.down` |
+| `backup.stale` | the newest `casavpn-*.tar.*` in `/var/backups/casavpn`. Skipped when backups are not set up. With no backup yet, the reference is the first run of the script | `backup.stale:<newest backup day>` |
+| `disk.low` | `df -P /` | `disk.low` |
+| `host.rebooted` | `/proc/sys/kernel/random/boot_id` against `/var/lib/casavpn/alerts-boot-id`. The first run records it without an alert | `host.rebooted:<boot id>` |
+
+If the relay (or ntfy) does not answer, the run skips its remaining sends, still runs
+every check, and exits 1; nothing is marked as delivered, so the next run retries.
+`casavpn-ddns` keeps an undelivered `ip.changed` for up to 24 h for the same reason.
+
+A key longer than 64 characters (a long client name) is shortened to a prefix plus
+a checksum, so two clients never share a key. A client that stays at 100 % alerts
+again every 6 hours; that is the dedupe window, not a bug.
+
 ## Relay API
 
 Base URL: the Worker's URL (`https://casavpn-monitor.<subdomain>.workers.dev`).
@@ -153,11 +175,33 @@ a panel API token, the relay URL, the app token, and the subscription base URL
 casavpn://pair?panel=<url>&panelToken=<token>&relay=<url>&relayToken=<token>&sub=<url>
 ```
 
-`scripts/casavpn-pair` prints that QR on the host's terminal.
+`scripts/casavpn-pair` (installed as `casavpn-pair`) prints that link and its QR
+on the host's terminal. Every value is percent-encoded. The link goes to stdout;
+the warning and the QR go to stderr, so `sudo casavpn-pair --no-qr > code.txt`
+keeps only the link. **The code contains secrets** (the panel token and the relay
+app token): scan it, then clear the screen.
+
+Where each value comes from:
+
+| Value | Source |
+|---|---|
+| `panel` | `CASAVPN_DOMAIN` and `CASAVPN_WEB_PORT` (default 8443) from `casavpn.env`, plus the panel's base path from the 3x-ui database (fallback: `PANEL_BASE_PATH` in `/etc/casavpn/panel-credentials.env`) |
+| `panelToken` | made by 3x-ui's own command line: `x-ui setting -getApiToken -tokenName casavpn-app -tokenScope admin` (checked against 3x-ui 3.10.2's source; not run on a Pi). Or `CASAVPN_PANEL_TOKEN`, then nothing is created |
+| `relay` | `CASAVPN_RELAY_URL` from `casavpn.env` |
+| `relayToken` | the **app** token: `CASAVPN_RELAY_APP_TOKEN`, or a hidden prompt. The host does not store it. The host token in `casavpn.env` is refused here |
+| `sub` | `https://<domain>:<web port>/sub/` |
+
+3x-ui keeps only a hash of an API token, so an existing token cannot be shown
+again. When a token named `casavpn-app` exists, `casavpn-pair` asks before it
+replaces it (`--yes` skips the question); the phone paired earlier then stops
+working until it scans the new code. It checks everything else first and replaces
+the token last.
 
 Panel token scope: an **admin** token unlocks everything; a **monitor** token
 gives the Status tab only (the Clients tab then says the token cannot list clients).
-Create it in the panel under Settings → API tokens.
+`casavpn-pair` makes an admin token. To hand the phone a monitor token, create one
+in the panel under Settings → API tokens and run
+`CASAVPN_PANEL_TOKEN=<token> casavpn-pair`.
 
 No analytics, no third-party SDKs. The app sends data only to the panel and the
 relay you configure.
@@ -171,4 +215,7 @@ relay you configure.
    (`openssl rand -hex 32` each), `APNS_KEY_P8` (`< AuthKey_XXXX.p8`),
    `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC`; then `npx wrangler deploy`.
 3. On the host: put `CASAVPN_RELAY_URL` and `CASAVPN_RELAY_TOKEN` (the host token)
-   in `casavpn.env`; run `sudo scripts/casavpn-pair` and scan the code in the app.
+   in `casavpn.env` and run `sudo ./install.sh` again. It installs `casavpn-alerts`
+   and turns its timer on (`systemctl list-timers casavpn-alerts.timer`; test with
+   `sudo casavpn-alerts --dry-run`). Then run `sudo casavpn-pair`, type the app
+   token when asked, and scan the code in the app.
