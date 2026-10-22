@@ -19,6 +19,10 @@
 #   CASAVPN_DDNS_PROVIDER   cloudflare (default). See "provider contract" below.
 #   CF_API_TOKEN, CF_ZONE_ID   Cloudflare credentials (provider cloudflare)
 #   NTFY_URL                optional push alerts
+#   CASAVPN_RELAY_URL, CASAVPN_RELAY_TOKEN
+#                           optional: also send ip.changed and ddns.failed to the
+#                           alert relay of the iPhone app (docs/APP.md), through
+#                           scripts/lib/casavpn-notify.sh. Same hourly limit as ntfy.
 #
 # Usage: casavpn-ddns [--check] [--dry-run] [--force]
 #   --check    exit 0 if the DNS record == public IP, else 1. Writes nothing.
@@ -78,8 +82,21 @@ CASAVPN_DOMAIN="${CASAVPN_DOMAIN:-}"
 CASAVPN_DDNS_PROVIDER="${CASAVPN_DDNS_PROVIDER:-cloudflare}"
 CASAVPN_VPN_PORT="${CASAVPN_VPN_PORT:-443}"
 NTFY_URL="${NTFY_URL:-}"
+CASAVPN_RELAY_URL="${CASAVPN_RELAY_URL:-}"
+CASAVPN_RELAY_TOKEN="${CASAVPN_RELAY_TOKEN:-}"
 CASAVPN_DDNS_EXPECT_IFACE="${CASAVPN_DDNS_EXPECT_IFACE:-}"
 CASAVPN_DDNS_EXPECT_GATEWAY="${CASAVPN_DDNS_EXPECT_GATEWAY:-}"
+
+# The sender shared with casavpn-alerts. Without it (a copy of this script on its
+# own) only ntfy works; the run never depends on the relay.
+for _lib in "${CASAVPN_LIB_DIR:-}" "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib" /usr/local/lib/casavpn; do
+  if [[ -n "$_lib" && -r "$_lib/casavpn-notify.sh" ]]; then
+    # shellcheck source=lib/casavpn-notify.sh
+    . "$_lib/casavpn-notify.sh"
+    break
+  fi
+done
+unset _lib
 
 ts() { date '+%Y-%m-%dT%H:%M:%S%z'; }
 log() { printf '%s %s\n' "$(ts)" "$*"; }
@@ -176,32 +193,52 @@ acquire_lock() {
   LOCK_HELD=1
 }
 
-# alert <key> <priority> <title> <message>
-# Always logged. Pushed to NTFY_URL when set, at most once per ALERT_INTERVAL
-# per key. A failed push never fails the run.
+# relay_ready: the sender is installed and the relay is configured.
+relay_ready() {
+  declare -F casavpn_notify_relay >/dev/null 2>&1 && [[ -n "$CASAVPN_RELAY_URL" && -n "$CASAVPN_RELAY_TOKEN" ]]
+}
+
+# alert <key> <priority> <title> <message> [<kind> <severity> [<dedupe>]]
+# Always logged. Pushed to NTFY_URL when set, and, when a relay <kind> is given and
+# the relay is configured, to the relay too. Each channel is sent at most once per
+# ALERT_INTERVAL per key, and its rate-limit state is written only on a successful
+# delivery, so a channel that failed is retried on the next run. A failed push
+# never fails the run.
 alert() {
-  local key="$1" prio="$2" title="$3" msg="$4" safe now last
+  local key="$1" prio="$2" title="$3" msg="$4" kind="${5:-}" sev="${6:-}" dedupe="${7:-}"
+  local safe now last use_relay=0
   log "ALERT[$key] $title: $msg"
-  [[ -n "$NTFY_URL" ]] || return 0
+  if [[ -n "$kind" ]] && relay_ready; then use_relay=1; fi
+  [[ -n "$NTFY_URL" || "$use_relay" -eq 1 ]] || return 0
   if [[ "$WRITES" -ne 1 ]]; then
     log "(read-only mode: alert not sent)"
     return 0
   fi
   safe=$(printf '%s' "$key" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-100)
   now=$(date +%s)
-  last=$(read_state "alert-$safe")
-  if [[ "$last" =~ ^[0-9]+$ ]] && (( now - last < ALERT_INTERVAL )); then
-    log "alert '$key' suppressed (already sent within the hour)"
-    return 0
+  if [[ -n "$NTFY_URL" ]]; then
+    last=$(read_state "alert-$safe")
+    if [[ "$last" =~ ^[0-9]+$ ]] && (( now - last < ALERT_INTERVAL )); then
+      log "alert '$key' suppressed (already sent within the hour)"
+    # -f: an HTTP 4xx/5xx (429, 503...) is a failed delivery, so the rate-limit
+    # state is only written on 2xx and the next run retries.
+    elif curl -fsS --max-time 10 --connect-timeout 5 \
+           -H "Title: $title" -H "Priority: $prio" -H "Tags: satellite" \
+           -d "$msg" "$NTFY_URL" >/dev/null; then
+      write_state "alert-$safe" "$now"
+    else
+      err "could not deliver the ntfy alert '$key'"
+    fi
   fi
-  # -f: an HTTP 4xx/5xx (429, 503...) is a failed delivery, so the rate-limit
-  # state is only written on 2xx and the next run retries.
-  if curl -fsS --max-time 10 --connect-timeout 5 \
-       -H "Title: $title" -H "Priority: $prio" -H "Tags: satellite" \
-       -d "$msg" "$NTFY_URL" >/dev/null; then
-    write_state "alert-$safe" "$now"
-  else
-    err "could not deliver the ntfy alert '$key'"
+  if [[ "$use_relay" -eq 1 ]]; then
+    last=$(read_state "relay-$safe")
+    if [[ "$last" =~ ^[0-9]+$ ]] && (( now - last < ALERT_INTERVAL )); then
+      log "relay alert '$key' suppressed (already sent within the hour)"
+    elif casavpn_notify_relay "$kind" "$sev" "$title" "$msg" "$dedupe"; then
+      write_state "relay-$safe" "$now"
+    else
+      err "could not deliver the relay alert '$key'"
+    fi
   fi
 }
 
@@ -216,7 +253,8 @@ on_exit() {
     write_state fail-count "$count"
     if (( count >= FAIL_ALERT_AFTER )); then
       alert "failing" high "casavpn-ddns failing" \
-        "casavpn-ddns failed $count runs in a row. Last error: ${LAST_ERROR:-unknown}"
+        "casavpn-ddns failed $count runs in a row. Last error: ${LAST_ERROR:-unknown}" \
+        ddns.failed critical "ddns.failed"
     fi
   fi
   exit "$rc"
@@ -244,7 +282,7 @@ load_env_file() {
     esac
     case "$key" in
       CF_API_TOKEN|CF_ZONE_ID|CASAVPN_DOMAIN|CASAVPN_DDNS_PROVIDER|CASAVPN_VPN_PORT|NTFY_URL|\
-      CASAVPN_DDNS_EXPECT_IFACE|CASAVPN_DDNS_EXPECT_GATEWAY)
+      CASAVPN_RELAY_URL|CASAVPN_RELAY_TOKEN|CASAVPN_DDNS_EXPECT_IFACE|CASAVPN_DDNS_EXPECT_GATEWAY)
         printf -v "$key" '%s' "$val" ;;
       *) ;;   # the env file is shared; keys for other tools are not ours to judge
     esac
@@ -498,7 +536,8 @@ main() {
 
   if [[ -n "$drift" ]]; then
     alert "changed-${old_ip:-none}-${PUBLIC_IP}" default "CasaVPN: DNS updated" \
-      "${CASAVPN_DOMAIN}: ${old_ip:-none} -> ${PUBLIC_IP} (${drift})"
+      "${CASAVPN_DOMAIN}: ${old_ip:-none} -> ${PUBLIC_IP} (${drift})" \
+      ip.changed warning "ip.changed:${old_ip:-none}-${PUBLIC_IP}"
   fi
   exit 0
 }

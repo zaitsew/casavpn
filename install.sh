@@ -346,7 +346,7 @@ step_files() {
   install_file 0755 "$HERE/scripts/healthcheck.sh" "$BIN_DIR/casavpn-healthcheck"
   install_file 0755 "$HERE/scripts/upgrade.sh" "$BIN_DIR/casavpn-upgrade"
   install_file 0755 "$HERE/scripts/rollback.sh" "$BIN_DIR/casavpn-rollback"
-  for f in common.sh set_min_client_ver.py check_xray_template.py render_links.py extract_zip_member.py; do
+  for f in common.sh casavpn-notify.sh set_min_client_ver.py check_xray_template.py render_links.py extract_zip_member.py; do
     install_file 0755 "$LIB/$f" "$LIB_DIR/$f"
   done
   install_file 0644 "$PIN" "$LIB_DIR/xui-release.env"

@@ -23,11 +23,12 @@ mkdir -p "$TMP/bin"
 cat >"$TMP/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 # Fake curl: see tests/test-ddns.sh. Controlled through files in $FAKE_DIR.
-method=GET; url=""; data=""; headers=""; has_cfg=0; fail_http=0; np=""
+method=GET; url=""; data=""; headers=""; has_cfg=0; fail_http=0; np=""; want_code=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -X) method="$2"; shift ;;
-    --data|-d) data="$2"; shift ;;
+    --data|--data-binary|-d) data="$2"; shift ;;
+    -w) want_code=1; shift ;;
     -H) headers="$headers|$2"; shift ;;
     --noproxy) np="$2"; shift ;;
     -K) has_cfg=1; shift ;;
@@ -37,7 +38,7 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-[ "$has_cfg" = 1 ] && cat >>"$FAKE_DIR/stdin.log"
+[ "$has_cfg" = 1 ] && tee -a "$FAKE_DIR/stdin.log" >"$FAKE_DIR/last_stdin"
 echo "$method $url" >>"$FAKE_DIR/calls.log"
 printf 'noproxy=[%s] proxyenv=[%s] %s\n' "$np" "${HTTPS_PROXY:-}${ALL_PROXY:-}" "$url" >>"$FAKE_DIR/proxy.log"
 
@@ -68,6 +69,11 @@ case "$url" in
         jq -c --argjson b "$data" '. + [$b + {id: "created1"}]' "$rec" >"$rec.new" && mv "$rec.new" "$rec"
         echo '{"success":true,"errors":[],"result":{}}' ;;
     esac ;;
+  *relay.test/v1/events)
+    # the alert relay (scripts/lib/casavpn-notify.sh): a POST of a JSON event, HTTP code on stdout
+    printf '%s|%s\n' "$method" "$data" >>"$FAKE_DIR/relay.log"
+    cp "$FAKE_DIR/last_stdin" "$FAKE_DIR/relay_auth" 2>/dev/null
+    if [ "$want_code" = 1 ]; then if [ -f "$FAKE_DIR/relay_503" ]; then printf 503; else printf 202; fi; fi ;;
   *)
     # anything else is the ntfy topic
     printf '%s|%s|%s\n' "$url" "$headers" "$data" >>"$FAKE_DIR/ntfy.log"
@@ -97,6 +103,10 @@ out_has()   { grep -q -- "$1" <<<"$OUT"; }
 rc_is()     { [ "$RC" -eq "$1" ]; }
 no_calls()  { ! grep -q -- "$1" "$FAKE_DIR/calls.log" 2>/dev/null; }
 has_calls() { grep -q -- "$1" "$FAKE_DIR/calls.log" 2>/dev/null; }
+relay_count() { [ -f "$FAKE_DIR/relay.log" ] && wc -l <"$FAKE_DIR/relay.log" | tr -d ' ' || echo 0; }
+token_not_in_output() { ! grep -q hosttoken123 <<<"$OUT"; }
+relay_names_last_error() { relay_json 1 | grep -q 'Last error'; }
+relay_json() { sed -n "${1:-1}p" "$FAKE_DIR/relay.log" | cut -d'|' -f2-; }
 ntfy_count() { [ -f "$FAKE_DIR/ntfy.log" ] && wc -l <"$FAKE_DIR/ntfy.log" | tr -d ' ' || echo 0; }
 topic_not_in_output() { ! grep -q secret-topic <<<"$OUT"; }
 no_tmp_files() { [ -z "$(find "$STATE_DIR" -name '.tmp*' 2>/dev/null)" ]; }
@@ -393,6 +403,39 @@ new_case; write_env "CASAVPN_DDNS_PROVIDER=cloudflare" "CASAVPN_VPN_PORT=8123"; 
 assert "--check hint uses the configured VPN port" out_has "nc -vz vpn.example.test 8123"
 new_case; grep -v '^CF_ZONE_ID' "$ENV_FILE" >"$ENV_FILE.new" && mv "$ENV_FILE.new" "$ENV_FILE"; ddns
 assert "missing CF_ZONE_ID: exits 1 and says so" bash -c "[ $RC -eq 1 ] && grep -q 'CF_ZONE_ID not set' <<<\"\$1\"" _ "$OUT"
+
+# --- 18c. the alert relay gets ip.changed and ddns.failed -----------------------------------------------------------
+RELAY_ENV=("CASAVPN_RELAY_URL=https://relay.test" "CASAVPN_RELAY_TOKEN=hosttoken123")
+new_case; write_env "NTFY_URL=https://ntfy.test/secret-topic" "${RELAY_ENV[@]}"; ddns
+assert "relay: a stale record is still repaired" test "$(rec content)" = "$IP"
+assert "relay: ip.changed is posted once" test "$(relay_count)" = "1"
+assert "relay: ... as a warning of kind ip.changed" test "$(relay_json 1 | jq -r '[.kind,.severity]|join(" ")')" = "ip.changed warning"
+assert "relay: ... with the old and the new address in the dedupe key" test "$(relay_json 1 | jq -r .dedupe)" = "ip.changed:$OLD-$IP"
+assert "relay: ... and the same text as ntfy" test "$(relay_json 1 | jq -r .body)" = "vpn.example.test: $OLD -> $IP (content $OLD->$IP)"
+assert "relay: the token travels in curl's stdin config" grep -q 'Authorization: Bearer hosttoken123' "$FAKE_DIR/relay_auth"
+assert "relay: ntfy still gets its push" test "$(ntfy_count)" = "1"
+assert "relay: the token is not printed" token_not_in_output
+new_case; write_env "${RELAY_ENV[@]}"; ddns
+assert "relay without ntfy: ip.changed is posted" test "$(relay_count)" = "1"
+assert "relay without ntfy: the rate-limit state is kept per channel" test -f "$STATE_DIR/relay-changed-${OLD}-${IP}"
+new_case; write_env "${RELAY_ENV[@]}"; ddns --dry-run
+assert "relay: --dry-run posts nothing" test "$(relay_count)" = "0"
+new_case; write_env "${RELAY_ENV[@]}"; set_records "[{\"id\":\"rec1\",\"type\":\"A\",\"name\":\"vpn.example.test\",\"content\":\"$IP\",\"proxied\":false,\"ttl\":60}]"; ddns
+assert "relay: nothing changed, nothing posted" test "$(relay_count)" = "0"
+new_case; write_env "${RELAY_ENV[@]}"; touch "$FAKE_DIR/get_fail"
+ddns; ddns
+assert "relay: no ddns.failed after 2 failed runs" test "$(relay_count)" = "0"
+ddns
+assert "relay: ddns.failed after the 3rd failed run" test "$(relay_json 1 | jq -r '[.kind,.severity,.dedupe]|join(" ")')" = "ddns.failed critical ddns.failed"
+assert "relay: ... naming the last error" relay_names_last_error
+ddns
+assert "relay: a 4th failure within the hour is not posted again" test "$(relay_count)" = "1"
+new_case; write_env "${RELAY_ENV[@]}"; touch "$FAKE_DIR/relay_503"; ddns
+assert "relay down: the run still repairs DNS and exits 0" bash -c "[ $RC -eq 0 ] && [ \"\$(jq -r '.[0].content' '$FAKE_DIR/records.json')\" = '$IP' ]"
+assert "relay down: the failure is logged" out_has "could not deliver the relay alert"
+assert "relay down: no rate-limit state, so the next run retries" test ! -f "$STATE_DIR/relay-changed-${OLD}-${IP}"
+new_case; write_env "NTFY_URL=https://ntfy.test/secret-topic" "CASAVPN_RELAY_URL=https://relay.test"; ddns
+assert "relay URL without a token: not used" test "$(relay_count)" = "0"
 
 # --- 22. bad arguments --------------------------------------------------------------------------------------------------------------
 new_case; ddns --nonsense
