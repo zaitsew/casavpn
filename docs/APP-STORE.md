@@ -98,6 +98,7 @@ cannot go into version 1.0.
 - Choose the build for the version, and set Pricing to Free (the price schedule is set there).
 - GitHub Pages for this repo: Settings, Pages, branch `main`, folder `/docs`.
 - "Add for Review" and "Submit for Review". The first public release is the owner's call.
+- After a rejection: reply on the App Review page, then open the version and click "Update Review"; only then is "Resubmit to App Review" enabled.
 
 ## Rejection log
 
