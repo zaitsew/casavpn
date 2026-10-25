@@ -84,6 +84,7 @@ cannot go into version 1.0.
 | Guideline | Risk | Answer in the listing and the notes |
 |---|---|---|
 | 5.4 VPN apps | "VPN" in the name; the app manages a VPN. A reviewer may think it is a VPN client. | The description and notes say it is an admin console, not a VPN service; it uses no NetworkExtension and routes nothing. The seller is an organization anyway. |
+| 2.1 VPN questionnaire | Apple's automated analysis flags "VPN functionality" and rejects until three questions are answered (1.0.0, 2026-10-25). | `review_notes.txt` answers them under "VPN QUESTIONS"; the same answers go in the reply to App Review. |
 | 4.2 Minimum functionality | An app that needs your own server may look empty. | Demo mode shows every screen with sample data. |
 | 2.1 App completeness | The reviewer has no server or account. | Demo mode; no account exists. |
 | 5.2.1 / 2.3.7 Third-party names | "3x-ui" in the description. | Named once, as compatibility. Not in the name, subtitle or keywords. "Xray" is not used. |
@@ -97,6 +98,7 @@ cannot go into version 1.0.
 - Choose the build for the version, and set Pricing to Free (the price schedule is set there).
 - GitHub Pages for this repo: Settings, Pages, branch `main`, folder `/docs`.
 - "Add for Review" and "Submit for Review". The first public release is the owner's call.
+- After a rejection: reply on the App Review page, then open the version and click "Update Review"; only then is "Resubmit to App Review" enabled.
 
 ## Rejection log
 
@@ -106,3 +108,4 @@ add a bullet to POLICY section 15.
 
 | Date | Version (build) | Guideline | Reason, verbatim | Cause | Fix |
 |---|---|---|---|---|---|
+| 2026-10-25 | 1.0.0 (2) | 2.1.0 Performance: App Completeness | "An automated analysis indicates the app contains VPN functionality." Apple asks what user information the app collects using VPN, for what purposes, and whether it is shared with third parties, in a reply and in the App Review Information section. | The review notes said the app is not a VPN client, but did not answer Apple's three VPN questions. | Answers added to `review_notes.txt` ("VPN QUESTIONS"), pushed with `store.py review --apply`, the same answers sent as the reply; build 2 resubmitted unchanged. |

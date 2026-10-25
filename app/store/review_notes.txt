@@ -1,6 +1,12 @@
 SUMMARY
 CasaVPN is a remote admin console for a VPN server that the user owns and runs (a 3x-ui panel on a home server). It is NOT a VPN client and NOT a VPN service. It never creates a tunnel, never uses NetworkExtension or NEVPNManager, and never routes or inspects any traffic. It only calls the HTTPS API of the user's own panel and of the user's own alert relay.
 
+VPN QUESTIONS (App Review, 2.1)
+The app has no VPN features. It links no NetworkExtension framework and has no Personal VPN or Network Extension entitlement; its only entitlements are push notifications and time-sensitive notifications. It shows the share links and QR codes that the user's own panel generates, so the user can import them into a separate VPN client app.
+- What user information is the app collecting using VPN? None. The app has no VPN function and collects no user information.
+- For what purposes? None. The app displays data fetched over HTTPS from the user's own panel; the panel credentials stay in the iPhone Keychain.
+- Shared with third parties? No. The developer runs no server and receives no data. Only the user's own panel and the user's own alert relay (the push token) receive anything.
+
 HOW TO TRY IT WITHOUT A SERVER (DEMO MODE)
 1. Launch the app. The first screen is the sign-in screen.
 2. Tap "Try demo mode" at the bottom of that screen.
