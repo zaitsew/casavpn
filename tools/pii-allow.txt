@@ -93,6 +93,10 @@ literal github.com/zaitsew/casavpn/
 # is never rewritten.
 ack-identity e0acebbc340c
 
+# Same for the GitHub merge of pull request #12 on 2026-10-25. Merge locally
+# (git merge --no-ff) so the merge commit keeps the project identity.
+ack-identity 98931ab2d7
+
 # The public project URLs that the App Store listing, the privacy policy and the support
 # page must name (app/store/, docs/privacy.md, docs/support.md). They contain the account
 # name that owns this public repository; only these two exact prefixes are accepted.
