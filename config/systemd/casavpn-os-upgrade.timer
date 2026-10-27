@@ -1,0 +1,16 @@
+[Unit]
+Description=Upgrade the operating system monthly (first Sunday, 04:30)
+Documentation=file:///usr/local/share/doc/casavpn/UPGRADING.md
+
+[Timer]
+# The reboot window: the first Sunday of the month at 04:30, local time. The VPN
+# is down for the reboot (about two minutes on a Raspberry Pi 5). Move it with a
+# drop-in: sudo systemctl edit casavpn-os-upgrade.timer
+OnCalendar=Sun *-*-01..07 04:30:00
+AccuracySec=1min
+# A missed window (the host was off) waits for the next one: a catch-up run at
+# boot would reboot at a random hour.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

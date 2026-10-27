@@ -56,6 +56,9 @@ expect "installs the pairing script" 0 "would install /usr/local/bin/casavpn-pai
 expect "installs the alerts timer next to the others" 0 "casavpn-alerts.timer"
 expect "plans the alerts timer only when a channel is set" 0 "casavpn-alerts.timer if CASAVPN_RELAY_URL"
 expect "needs qrencode for the pairing code" 0 "qrencode"
+expect "installs the OS upgrade script" 0 "would install /usr/local/bin/casavpn-os-upgrade"
+expect "  ...its timer and post-check unit" 0 "casavpn-os-upgrade-check.service"
+expect "plans the monthly OS upgrade unless it is off" 0 "casavpn-os-upgrade.timer (first Sunday of the month, 04:30) unless CASAVPN_OS_UPGRADE=off"
 OUT="$("$INSTALL" --dry-run --env "$T/ok.env" --skip-firewall --skip-ssh --skip-3xui 2>&1)"; RC=$?
 expect "--skip-* leaves the step out" 0 "dry run finished"
 lacks  "  ...firewall step absent" "== Firewall"

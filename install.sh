@@ -341,7 +341,7 @@ step_packages() {
 step_files() {
   step "Our scripts and helpers"
   local f
-  for f in casavpn-ddns casavpn-backup casavpn-minver casavpn-alerts casavpn-pair; do
+  for f in casavpn-ddns casavpn-backup casavpn-minver casavpn-alerts casavpn-pair casavpn-os-upgrade; do
     install_file 0755 "$HERE/scripts/$f" "$BIN_DIR/$f"
   done
   install_file 0755 "$HERE/scripts/healthcheck.sh" "$BIN_DIR/casavpn-healthcheck"
@@ -710,14 +710,16 @@ step_fail2ban() {
 # ====================================================================== timers ==
 
 step_timers() {
-  step "Timers: DDNS, backups and alerts"
+  step "Timers: DDNS, backups, alerts and the monthly OS upgrade"
   local f
-  for f in casavpn-ddns.service casavpn-ddns.timer casavpn-backup.service casavpn-backup.timer casavpn-alerts.service casavpn-alerts.timer; do
+  for f in casavpn-ddns.service casavpn-ddns.timer casavpn-backup.service casavpn-backup.timer casavpn-alerts.service casavpn-alerts.timer \
+           casavpn-os-upgrade.service casavpn-os-upgrade.timer casavpn-os-upgrade-check.service; do
     install_file 0644 "$HERE/config/systemd/$f" "$SYSTEMD_DIR/$f"
   done
   if [ "$DRY_RUN" = 1 ]; then
     log "  would enable casavpn-ddns.timer if CF_API_TOKEN is set, casavpn-backup.timer if AGE_RECIPIENT is set,"
     log "  and casavpn-alerts.timer if CASAVPN_RELAY_URL and CASAVPN_RELAY_TOKEN (or NTFY_URL) are set"
+    log "  and casavpn-os-upgrade.timer (first Sunday of the month, 04:30) unless CASAVPN_OS_UPGRADE=off"
   else
     systemctl daemon-reload
     if [ -n "$CF_API_TOKEN" ] && [ -n "$CF_ZONE_ID" ]; then
@@ -739,6 +741,14 @@ step_timers() {
     else
       warn "alerts are not enabled (no CASAVPN_RELAY_URL/CASAVPN_RELAY_TOKEN and no NTFY_URL)"
       leave "Alerts: deploy the relay (docs/APP.md, Setup), put CASAVPN_RELAY_URL and CASAVPN_RELAY_TOKEN (the host token) in $ENV_FILE, re-run install.sh, then 'sudo casavpn-pair' (or set NTFY_URL for ntfy alone)."
+    fi
+    if [ "${CASAVPN_OS_UPGRADE:-monthly}" = off ]; then
+      systemctl disable --now casavpn-os-upgrade.timer >/dev/null 2>&1 || true
+      systemctl disable casavpn-os-upgrade-check.service >/dev/null 2>&1 || true
+      warn "the monthly OS upgrade is off (CASAVPN_OS_UPGRADE=off); upgrade by hand (docs/UPGRADING.md)"
+    else
+      systemctl enable casavpn-os-upgrade-check.service >/dev/null 2>&1 || warn "could not enable casavpn-os-upgrade-check.service"
+      systemctl enable --now casavpn-os-upgrade.timer >/dev/null 2>&1 && ok "casavpn-os-upgrade.timer enabled (first Sunday of the month, 04:30, with a reboot)"
     fi
   fi
 }

@@ -42,6 +42,8 @@ ntfy stays an optional second channel for the host scripts.
 | `backup.stale` | warning | `casavpn-alerts` | the newest backup is older than 36 h |
 | `disk.low` | warning | `casavpn-alerts` | the root filesystem is over 90 % full |
 | `host.rebooted` | info | `casavpn-alerts` | the host booted since the last run |
+| `host.upgraded` | info | `casavpn-os-upgrade` | the monthly OS upgrade finished and every post-check passed |
+| `host.upgrade_failed` | critical, warning when skipped | `casavpn-os-upgrade` | the upgrade failed, its plan was refused, or a post-check failed after the reboot |
 | `test` | info | app | the user pressed "Send test alert" |
 
 Critical alerts are delivered as time-sensitive notifications.

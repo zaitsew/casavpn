@@ -136,7 +136,49 @@ host cannot reach GitHub, fetch the tarball on your laptop, verify it against
 
 ## Operating system upgrades
 
-`apt full-upgrade` and distribution upgrades are yours. Take a
-[backup](BACKUP.md) first, run `sudo nft -c -f /etc/nftables.conf` and
-`sudo sshd -t` afterwards, reboot once while you are next to the machine, and run
+Debian packages upgrade themselves. Two routines do it:
+
+- **Daily:** unattended-upgrades installs security fixes. It never reboots.
+- **Monthly:** `casavpn-os-upgrade.timer` runs `apt full-upgrade` on the first
+  Sunday of the month at 04:30, reboots, and checks the VPN came back. The VPN is
+  down for the reboot, about two minutes on a Raspberry Pi 5.
+
+The monthly run, in order:
+
+1. Preflight: `dpkg --audit` is clean, 1 GB free on `/`, 50 MB on the boot partition.
+2. It records which units are active: ssh, nginx, x-ui, nftables, fail2ban, the
+   CasaVPN timers, and `CASAVPN_OS_UPGRADE_UNITS`.
+3. `apt-get update`, then a simulated `full-upgrade`. It stops with nothing changed
+   when the plan removes a protected package (openssh-server, nftables, nginx,
+   systemd, sudo and a few more) or more than 3 packages.
+4. `apt-get full-upgrade` with `--force-confold`: config files we changed stay.
+5. A reboot, when anything was upgraded or `/run/reboot-required` exists.
+6. After the boot, `casavpn-os-upgrade-check.service` checks for up to 5 minutes:
+   the units that were active are active again, the VPN port listens, an nftables
+   ruleset is loaded, dpkg is clean, and DNS points at the host.
+
+The result reaches the phone as `host.upgraded` (info) or `host.upgrade_failed`
+(critical, naming what failed). It is also in `/var/lib/casavpn/os-upgrade-last`.
+A failed upgrade does not reboot. If the host does not come back at all, the
+external monitor sends `vpn.down` ([MONITORING.md](MONITORING.md)).
+
+apt does not touch 3x-ui or the Xray core: they are not Debian packages. Move
+those with `casavpn-upgrade` above.
+
+```bash
+sudo casavpn-os-upgrade --dry-run      # the plan from the current package lists; changes nothing
+sudo systemctl start casavpn-os-upgrade.service   # run it now, reboot included
+sudo casavpn-os-upgrade --no-reboot    # upgrade, check, no reboot
+systemctl list-timers casavpn-os-upgrade.timer
+journalctl -u casavpn-os-upgrade.service -u casavpn-os-upgrade-check.service -b -1
+```
+
+Move the window with `sudo systemctl edit casavpn-os-upgrade.timer` (an
+`OnCalendar=` drop-in). Turn it off with `CASAVPN_OS_UPGRADE=off` in
+`casavpn.env` and re-run `install.sh`. A missed window (the host was off) waits
+for the next month: a catch-up run at boot would reboot at a random hour.
+
+Distribution upgrades (Debian 13 to 14) stay yours. Take a [backup](BACKUP.md)
+first, run `sudo nft -c -f /etc/nftables.conf` and `sudo sshd -t` afterwards,
+reboot once while you are next to the machine, and run
 `casavpn-healthcheck --local`.
