@@ -4,6 +4,13 @@
 
 ### Added
 
+- `casavpn-os-upgrade`: the monthly operating-system upgrade (docs/UPGRADING.md). On the
+  first Sunday of the month at 04:30 it runs `apt full-upgrade` (config files kept),
+  reboots, and after the boot checks the units, the VPN port, nftables, dpkg and DNS.
+  It refuses a plan that removes any package (`--no-remove` on the real run). The
+  result goes to the app as `host.upgraded` or `host.upgrade_failed`. `install.sh`
+  enables it; `CASAVPN_OS_UPGRADE=off` opts out.
+
 - App 1.0.0 (build 2) replaces the 3x-ui panel on the phone. Panel-style sign-in first
   (address, user, password, 2FA; the app makes its own API token and drops the password),
   optional request headers per server for Cloudflare Access, honest network errors, a Status

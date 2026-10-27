@@ -1,0 +1,19 @@
+[Unit]
+Description=Check the VPN after the monthly OS upgrade rebooted the host
+Documentation=file:///usr/local/share/doc/casavpn/UPGRADING.md
+# Runs only on the boot that follows an upgrade.
+ConditionPathExists=/var/lib/casavpn/os-upgrade-pending
+After=network-online.target x-ui.service nginx.service nftables.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/casavpn-os-upgrade --post-check
+# The script retries for up to 5 minutes while units start.
+TimeoutStartSec=10min
+StateDirectory=casavpn
+StateDirectoryMode=0700
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

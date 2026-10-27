@@ -1,0 +1,17 @@
+[Unit]
+Description=Upgrade every Debian package, reboot, and check the VPN came back
+Documentation=file:///usr/local/share/doc/casavpn/UPGRADING.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The script reads /etc/casavpn/casavpn.env itself (0600 root). apt writes all over
+# the system, so this unit has no filesystem sandbox, unlike the other timers.
+ExecStart=/usr/local/bin/casavpn-os-upgrade
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=idle
+StateDirectory=casavpn
+StateDirectoryMode=0700
+UMask=0022

@@ -1,0 +1,377 @@
+#!/usr/bin/env bash
+#
+# casavpn-os-upgrade — the monthly operating-system upgrade: every Debian package,
+# a reboot, and a check that the VPN came back. casavpn-os-upgrade.timer runs it
+# on the first Sunday of the month at 04:30 (the reboot window), and
+# casavpn-os-upgrade-check.service runs the post-check after that reboot.
+#
+#   sudo casavpn-os-upgrade [--dry-run] [--no-reboot]
+#   sudo casavpn-os-upgrade --post-check
+#
+# An upgrade run, in order:
+#   1. preflight: one run at a time (a lock), dpkg is consistent (dpkg --audit),
+#      at least 1 GB free on / and 50 MB on the boot partition
+#   2. records which of the watched units are active: the post-check expects the
+#      same ones back
+#   3. apt-get update, then simulates full-upgrade. It stops before changing
+#      anything when the plan removes any package: a removal is a decision for
+#      the owner (it could be ssh or nftables), so it gets a warning instead
+#   4. apt-get full-upgrade --no-remove, non-interactive, keeping every config
+#      file we changed (--force-confold: the nftables, sshd and nginx files stay
+#      as they are). --no-remove makes apt abort if the lists changed after the
+#      simulation (apt-daily) and the real run would remove something after all
+#   5. reboots when anything was upgraded or the system asks for it
+#      (/run/reboot-required), unless --no-reboot or CASAVPN_OS_UPGRADE_REBOOT=never;
+#      without a reboot the post-check runs at once
+#
+# The post-check, retried for up to 5 minutes while the units start:
+#   - every watched unit that was active before is active again
+#   - something listens on CASAVPN_VPN_PORT (the VPN itself)
+#   - an nftables ruleset is loaded
+#   - dpkg --audit is clean
+#   - DNS points at this host (<DDNS command> --check), when DDNS is installed
+# It sends host.upgraded (info) when every check passes and host.upgrade_failed
+# (critical) naming the checks that did not. A failed upgrade (steps 1, 3, 4) also
+# sends host.upgrade_failed, and the host is not rebooted.
+#
+# apt does not touch 3x-ui or the Xray core: they are not Debian packages.
+# casavpn-upgrade moves those (docs/UPGRADING.md).
+#
+# Settings, from /etc/casavpn/casavpn.env (parsed, never sourced):
+#   CASAVPN_VPN_PORT                 the port the post-check expects a listener on
+#   CASAVPN_OS_UPGRADE_REBOOT        auto (default) or never
+#   CASAVPN_OS_UPGRADE_UNITS         more units to watch, space separated
+#   CASAVPN_OS_UPGRADE_DDNS          the DDNS command, run with --check
+#                                    (default /usr/local/bin/casavpn-ddns; none = skip)
+#   CASAVPN_RELAY_URL + CASAVPN_RELAY_TOKEN, NTFY_URL   where the result goes
+#
+# Files in the state directory (/var/lib/casavpn):
+#   os-upgrade-pending   written before the reboot, removed by the post-check
+#   os-upgrade-last      the result and the package list of the last run
+#
+# Exit codes: 0 done (or nothing to do), 1 failed (the alert says why), 2 usage,
+# 3 the plan was refused (nothing changed).
+#
+# Test hooks: CASAVPN_ENV_FILE, CASAVPN_OS_UPGRADE_STATE_DIR,
+# CASAVPN_REBOOT_REQUIRED (default /run/reboot-required), CASAVPN_OS_UPGRADE_BOOT
+# (the boot partition, default /boot/firmware or /boot), CASAVPN_OS_UPGRADE_WAIT
+# (post-check seconds, default 300), CASAVPN_OS_UPGRADE_STEP (seconds between
+# tries, default 15), CASAVPN_LIB_DIR. The tests stub apt-get, dpkg, systemctl,
+# ss, nft, df and curl on PATH.
+#
+# Bash 3.2 compatible, so the offline tests also run on a Mac.
+
+set -u -o pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${CASAVPN_ENV_FILE:-/etc/casavpn/casavpn.env}"
+STATE_DIR="${CASAVPN_OS_UPGRADE_STATE_DIR:-/var/lib/casavpn}"
+REBOOT_REQUIRED="${CASAVPN_REBOOT_REQUIRED:-/run/reboot-required}"
+WAIT="${CASAVPN_OS_UPGRADE_WAIT:-300}"
+STEP="${CASAVPN_OS_UPGRADE_STEP:-15}"
+PENDING="$STATE_DIR/os-upgrade-pending"
+LAST="$STATE_DIR/os-upgrade-last"
+
+# The units every CasaVPN host runs. A unit that is not active before the upgrade
+# is not expected after it, so a host without fail2ban or DDNS is not "failed".
+BASE_UNITS="ssh nginx x-ui nftables fail2ban casavpn-ddns.timer casavpn-alerts.timer casavpn-backup.timer"
+MIN_ROOT_KB=1048576
+MIN_BOOT_KB=51200
+
+DRY_RUN=0
+NO_REBOOT=0
+MODE=upgrade
+LOCKDIR=""
+
+log() { printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*"; }
+err() { printf '%s ERROR: %s\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$*" >&2; }
+usage() { awk 'NR > 2 && /^#/ { sub(/^# ?/, ""); print; next } NR > 2 { exit }' "${BASH_SOURCE[0]}"; }
+
+find_lib() {
+  local d
+  for d in "${CASAVPN_LIB_DIR:-}" "$HERE/lib" /usr/local/lib/casavpn; do
+    if [ -n "$d" ] && [ -r "$d/$1" ]; then printf '%s' "$d/$1"; return 0; fi
+  done
+  return 1
+}
+
+# notify <kind> <severity> <title> <body>: logs it, sends it where a channel is
+# set. A delivery failure is logged and does not change the run's result.
+notify() {
+  local rc=0
+  log "ALERT $2 $1: $3 — $4"
+  [ "$DRY_RUN" = 0 ] || return 0
+  casavpn_notify "$1" "$2" "$3" "$4" "$1:$(date +%Y-%m-%d)" || rc=$?
+  case "$rc" in
+    0) ;;
+    3) log "no alert channel is set; the result is only in this log and in $LAST" ;;
+    *) err "the alert was not delivered (code $rc)" ;;
+  esac
+}
+
+# write_file <path> <content>: atomic.
+write_file() {
+  local tmp
+  tmp="$(mktemp "$STATE_DIR/.tmp.XXXXXX")" || return 1
+  if printf '%s\n' "$2" >"$tmp" && mv -f "$tmp" "$1"; then return 0; fi
+  rm -f "$tmp"; return 1
+}
+
+# field <file> <key>: the value of a key=value line.
+field() { sed -n "s/^$2=//p" "$1" | head -n 1; }
+
+acquire_lock() {
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$STATE_DIR/os-upgrade.lock" || { err "cannot open the lock in $STATE_DIR"; exit 1; }
+    flock -n 9 || { log "another run holds the lock; skipping"; exit 0; }
+  else
+    # Machines without flock (macOS, the tests). The Pi has util-linux.
+    LOCKDIR="$STATE_DIR/os-upgrade.lock.d"
+    mkdir "$LOCKDIR" 2>/dev/null || { LOCKDIR=""; log "another run holds the lock; skipping"; exit 0; }
+    trap 'rm -rf "$LOCKDIR"' EXIT
+  fi
+}
+
+# free_kb <path>: available kilobytes on the filesystem holding path.
+free_kb() { df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print $4 }'; }
+
+boot_dir() {
+  if [ -n "${CASAVPN_OS_UPGRADE_BOOT:-}" ]; then printf '%s' "$CASAVPN_OS_UPGRADE_BOOT"
+  elif [ -d /boot/firmware ]; then printf '/boot/firmware'
+  else printf '/boot'; fi
+}
+
+watched_units() {
+  printf '%s %s\n' "$BASE_UNITS" "${CASAVPN_OS_UPGRADE_UNITS:-}" | awk '{ for (i = 1; i <= NF; i++) if (!seen[$i]++) printf "%s ", $i }'
+}
+
+active_units() {
+  local u out=""
+  for u in $(watched_units); do
+    if systemctl is-active --quiet "$u" 2>/dev/null; then out="$out$u "; fi
+  done
+  printf '%s' "${out% }"
+}
+
+APT_OPTS=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=600)
+apt_env() { env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a "$@"; }
+
+# --- the upgrade -----------------------------------------------------------------
+
+fail_upgrade() { # <title> <body>
+  notify host.upgrade_failed critical "$1" "$2"
+  [ "$DRY_RUN" = 1 ] || write_file "$LAST" "result=failed
+when=$(date +%s)
+reason=$1: $2" || true
+  exit 1
+}
+
+preflight() {
+  local audit root boot bootkb
+  audit="$(dpkg --audit 2>&1)"
+  if [ -n "$audit" ]; then
+    fail_upgrade "OS upgrade not started" "dpkg reports half-installed packages; run: sudo dpkg --configure -a. $(printf '%s' "$audit" | head -n 2 | tr '\n' ' ')"
+  fi
+  root="$(free_kb /)"
+  if ! [[ "$root" =~ ^[0-9]+$ ]] || [ "$root" -lt "$MIN_ROOT_KB" ]; then
+    fail_upgrade "OS upgrade not started" "under 1 GB free on / (${root:-unknown} KB)"
+  fi
+  boot="$(boot_dir)"
+  if [ -d "$boot" ]; then
+    bootkb="$(free_kb "$boot")"
+    if ! [[ "$bootkb" =~ ^[0-9]+$ ]] || [ "$bootkb" -lt "$MIN_BOOT_KB" ]; then
+      fail_upgrade "OS upgrade not started" "under 50 MB free on $boot (${bootkb:-unknown} KB)"
+    fi
+  fi
+}
+
+# check_plan <simulation output>: prints the refusal reason and returns 1, or 0.
+check_plan() {
+  local removed n
+  removed="$(printf '%s\n' "$1" | awk '$1 == "Remv" { print $2 }')"
+  n="$(printf '%s\n' "$removed" | awk 'NF' | wc -l | tr -d ' ')"
+  if [ "$n" -gt 0 ]; then
+    printf 'the plan removes %s package(s): %s' "$n" "$(printf '%s' "$removed" | head -n 8 | tr '\n' ' ' | sed 's/ $//')"
+    return 1
+  fi
+  return 0
+}
+
+run_upgrade() {
+  local before plan count reason out rc=0 reboot=0 started
+  started="$(date +%s)"
+  preflight
+  before="$(active_units)"
+  log "watched units active now: ${before:-none}"
+
+  if [ "$DRY_RUN" = 1 ]; then
+    log "dry run: the plan from the package lists as they are (no apt-get update)"
+  else
+    log "apt-get update"
+    if ! out="$(apt_env apt-get update -q 2>&1)"; then
+      fail_upgrade "OS upgrade not started" "apt-get update failed: $(printf '%s' "$out" | grep -E '^(E|W):' | head -n 2 | tr '\n' ' ')"
+    fi
+  fi
+
+  if ! plan="$(apt_env apt-get -s "${APT_OPTS[@]}" full-upgrade 2>&1)"; then
+    fail_upgrade "OS upgrade not started" "the full-upgrade simulation failed: $(printf '%s' "$plan" | grep -E '^E:' | head -n 2 | tr '\n' ' ')"
+  fi
+  count="$(printf '%s\n' "$plan" | awk '$1 == "Inst"' | wc -l | tr -d ' ')"
+  log "plan: $count package(s) to install or upgrade, $(printf '%s\n' "$plan" | awk '$1 == "Remv"' | wc -l | tr -d ' ') to remove"
+  if ! reason="$(check_plan "$plan")"; then
+    notify host.upgrade_failed warning "OS upgrade skipped" "$reason. Nothing was changed; run it by hand: sudo apt full-upgrade"
+    [ "$DRY_RUN" = 1 ] || write_file "$LAST" "result=refused
+when=$started
+reason=$reason" || true
+    exit 3
+  fi
+
+  if [ "$DRY_RUN" = 1 ]; then
+    printf '%s\n' "$plan" | awk '$1 == "Inst" || $1 == "Remv" { print "  " $1, $2 }'
+    if [ "$count" -gt 0 ] || [ -e "$REBOOT_REQUIRED" ]; then log "dry run: would upgrade and reboot"; else log "dry run: nothing to do"; fi
+    return 0
+  fi
+
+  if [ "$count" -gt 0 ]; then
+    log "apt-get full-upgrade ($count package(s))"
+    out="$(apt_env apt-get -y -q --no-remove "${APT_OPTS[@]}" full-upgrade 2>&1)" || rc=$?
+    printf '%s\n' "$out" | tail -n 40
+    if [ "$rc" -ne 0 ]; then
+      log "full-upgrade failed (exit $rc); dpkg --configure -a to leave dpkg consistent"
+      apt_env dpkg --configure -a --force-confdef --force-confold >/dev/null 2>&1 || true
+      fail_upgrade "OS upgrade failed" "apt-get full-upgrade exited $rc; no reboot. $(printf '%s' "$out" | grep -E '^E:' | head -n 2 | tr '\n' ' ')"
+    fi
+    apt_env apt-get -q autoclean >/dev/null 2>&1 || true
+    reboot=1
+  fi
+  [ -e "$REBOOT_REQUIRED" ] && reboot=1
+
+  if [ "$reboot" = 0 ]; then
+    log "nothing to upgrade and no reboot required"
+    write_file "$LAST" "result=nothing
+when=$started" || true
+    return 0
+  fi
+
+  write_file "$PENDING" "started=$started
+packages=$count
+units=$before
+list=$(printf '%s\n' "$plan" | awk '$1 == "Inst" { print $2 }' | tr '\n' ' ')
+reboot_at=" || { err "cannot write $PENDING"; exit 1; }
+
+  if [ "$NO_REBOOT" = 1 ] || [ "${CASAVPN_OS_UPGRADE_REBOOT:-auto}" = never ]; then
+    log "not rebooting (--no-reboot or CASAVPN_OS_UPGRADE_REBOOT=never); running the post-check now"
+    run_post_check
+    return $?
+  fi
+
+  write_file "$PENDING" "$(sed '/^reboot_at=/d' "$PENDING")
+reboot_at=$(date +%s)" || true
+  log "rebooting; casavpn-os-upgrade-check.service runs the post-check after the boot"
+  sync
+  systemctl reboot
+}
+
+# --- the post-check --------------------------------------------------------------
+
+# checks <units>: prints the failed checks, one per line; nothing when all pass.
+checks() {
+  local u port ddns
+  for u in $1; do
+    systemctl is-active --quiet "$u" 2>/dev/null || printf '%s is not active\n' "$u"
+  done
+  port="${CASAVPN_VPN_PORT:-443}"
+  if [ -z "$(ss -Hltn "sport = :$port" 2>/dev/null)" ]; then printf 'nothing listens on the VPN port %s\n' "$port"; fi
+  if [ -z "$(nft list tables 2>/dev/null)" ]; then printf 'no nftables ruleset is loaded\n'; fi
+  if [ -n "$(dpkg --audit 2>&1)" ]; then printf 'dpkg reports half-installed packages\n'; fi
+  ddns="${CASAVPN_OS_UPGRADE_DDNS:-/usr/local/bin/casavpn-ddns}"
+  if [ "$ddns" != none ] && [ -x "$ddns" ]; then
+    "$ddns" --check >/dev/null 2>&1 || printf 'DNS does not point at this host (%s --check)\n' "$(basename "$ddns")"
+  fi
+}
+
+run_post_check() {
+  local units count started reboot_at failed deadline now took body
+  if [ ! -e "$PENDING" ]; then log "no upgrade is pending a check"; return 0; fi
+  units="$(field "$PENDING" units)"
+  count="$(field "$PENDING" packages)"
+  started="$(field "$PENDING" started)"
+  reboot_at="$(field "$PENDING" reboot_at)"
+  deadline=$(( $(date +%s) + WAIT ))
+  while :; do
+    failed="$(checks "$units")"
+    [ -z "$failed" ] && break
+    now="$(date +%s)"
+    [ "$now" -ge "$deadline" ] && break
+    log "waiting for: $(printf '%s' "$failed" | tr '\n' ';')"
+    sleep "$STEP"
+  done
+
+  if [ -n "$reboot_at" ]; then took=" rebooted, back in $(( $(date +%s) - reboot_at )) s;"; else took=" no reboot;"; fi
+  if [ -z "$failed" ]; then
+    body="${count:-0} package(s) upgraded;$took all checks passed"
+    notify host.upgraded info "OS upgrade done" "$body"
+    write_file "$LAST" "result=ok
+when=${started:-}
+$(sed -n '/^list=/p' "$PENDING")
+summary=$body" || true
+    rm -f "$PENDING"
+    return 0
+  fi
+  body="${count:-0} package(s) upgraded;$took failed: $(printf '%s' "$failed" | tr '\n' ';' | sed 's/;$//; s/;/; /g')"
+  notify host.upgrade_failed critical "OS upgrade: checks failed" "$body"
+  write_file "$LAST" "result=check-failed
+when=${started:-}
+$(sed -n '/^list=/p' "$PENDING")
+summary=$body" || true
+  # One alert per upgrade: the next boot does not repeat it.
+  rm -f "$PENDING"
+  return 1
+}
+
+# --- main ------------------------------------------------------------------------
+
+main() {
+  local arg lib
+  for arg in "$@"; do
+    case "$arg" in
+      --dry-run) DRY_RUN=1 ;;
+      --no-reboot) NO_REBOOT=1 ;;
+      --post-check) MODE=check ;;
+      -h|--help) usage; exit 0 ;;
+      *) err "unknown option: $arg"; usage >&2; exit 2 ;;
+    esac
+  done
+  lib="$(find_lib casavpn-notify.sh)" || { err "casavpn-notify.sh not found (looked next to this script and in /usr/local/lib/casavpn)"; exit 1; }
+  # shellcheck source=lib/casavpn-notify.sh
+  . "$lib"
+  casavpn_env_load "$ENV_FILE" CASAVPN_VPN_PORT CASAVPN_RELAY_URL CASAVPN_RELAY_TOKEN NTFY_URL \
+    CASAVPN_OS_UPGRADE_REBOOT CASAVPN_OS_UPGRADE_UNITS CASAVPN_OS_UPGRADE_DDNS \
+    || log "cannot read $ENV_FILE; using the environment only"
+  case "${CASAVPN_OS_UPGRADE_REBOOT:-auto}" in auto|never) ;; *) err "CASAVPN_OS_UPGRADE_REBOOT must be auto or never"; exit 2 ;; esac
+
+  if [ "$DRY_RUN" = 1 ]; then
+    CASAVPN_NOTIFY_DRY_RUN=1; export CASAVPN_NOTIFY_DRY_RUN
+  fi
+  mkdir -p "$STATE_DIR" || { err "cannot create $STATE_DIR"; exit 1; }
+  chmod 700 "$STATE_DIR" 2>/dev/null || true
+  CASAVPN_NOTIFY_STATE_DIR="$STATE_DIR"; export CASAVPN_NOTIFY_STATE_DIR
+
+  if [ "$MODE" = check ]; then
+    if [ "$DRY_RUN" = 1 ]; then
+      checks "$(active_units)" | sed 's/^/would fail: /'
+      return 0
+    fi
+    acquire_lock
+    run_post_check
+    return $?
+  fi
+  [ "$DRY_RUN" = 1 ] || acquire_lock
+  if [ -e "$PENDING" ] && [ "$DRY_RUN" = 0 ]; then
+    log "an earlier upgrade is waiting for its post-check; running that first"
+    run_post_check || true
+  fi
+  run_upgrade
+}
+
+main "$@"

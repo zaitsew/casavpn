@@ -67,6 +67,7 @@ apply_defaults() {
   : "${CASAVPN_MIN_CLIENT_VER:=1.8.0}"
   # pinned = the Xray core in config/xray-core.env; bundled = whatever 3x-ui ships.
   : "${CASAVPN_XRAY_CORE:=pinned}"
+  : "${CASAVPN_OS_UPGRADE:=monthly}"
   : "${CASAVPN_DDNS_PROVIDER:=cloudflare}"
   : "${CASAVPN_ACME_STAGING:=0}"
   : "${CASAVPN_ACME_AGREE_TOS:=0}"
@@ -82,7 +83,7 @@ apply_defaults() {
   : "${CASAVPN_BACKUP_GROUP:=}"
   : "${CASAVPN_SSH_TARGET:=}"
   export CASAVPN_VPN_PORT CASAVPN_WEB_PORT CASAVPN_SSH_PORT CASAVPN_PANEL_PORT CASAVPN_SUB_PORT \
-    CASAVPN_LAN_CIDR CASAVPN_LAN_GATEWAY CASAVPN_FAIL2BAN_IGNOREIP CASAVPN_ADMIN_USER CASAVPN_REALITY_TARGET CASAVPN_MIN_CLIENT_VER CASAVPN_XRAY_CORE \
+    CASAVPN_LAN_CIDR CASAVPN_LAN_GATEWAY CASAVPN_FAIL2BAN_IGNOREIP CASAVPN_ADMIN_USER CASAVPN_REALITY_TARGET CASAVPN_MIN_CLIENT_VER CASAVPN_XRAY_CORE CASAVPN_OS_UPGRADE \
     CASAVPN_DDNS_PROVIDER CASAVPN_ACME_STAGING CASAVPN_ACME_AGREE_TOS CASAVPN_BACKUP_KEEP
 }
 
@@ -127,6 +128,7 @@ validate_env() {
   if [ "$CASAVPN_VPN_PORT" != 443 ]; then warn "CASAVPN_VPN_PORT is $CASAVPN_VPN_PORT, not 443: Xray warns that a non-443 Reality port makes the server's IP more likely to be blocked (docs/REALITY-TARGET.md)"; fi
   [[ "$CASAVPN_MIN_CLIENT_VER" =~ ^[0-9]+(\.[0-9]+){1,2}$ ]] || complain "CASAVPN_MIN_CLIENT_VER is not a version like 1.8.0"
   case "$CASAVPN_XRAY_CORE" in pinned|bundled) ;; *) complain "CASAVPN_XRAY_CORE '$CASAVPN_XRAY_CORE' is unknown (pinned | bundled)" ;; esac
+  case "$CASAVPN_OS_UPGRADE" in monthly|off) ;; *) complain "CASAVPN_OS_UPGRADE '$CASAVPN_OS_UPGRADE' is unknown (monthly | off)" ;; esac
   case "$CASAVPN_DDNS_PROVIDER" in cloudflare) ;; *) complain "CASAVPN_DDNS_PROVIDER '$CASAVPN_DDNS_PROVIDER' is unknown (cloudflare)" ;; esac
   if [ -n "$AGE_RECIPIENT" ] && ! [[ "$AGE_RECIPIENT" =~ ^age1[a-z0-9]{50,}$ ]]; then complain "AGE_RECIPIENT is not an age public key (age1...)"; fi
   if [ -n "$CF_API_TOKEN" ] && [ -z "$CF_ZONE_ID" ]; then complain "CF_API_TOKEN is set but CF_ZONE_ID is not"; fi
