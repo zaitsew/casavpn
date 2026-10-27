@@ -14,10 +14,12 @@
 #   2. records which of the watched units are active: the post-check expects the
 #      same ones back
 #   3. apt-get update, then simulates full-upgrade. It stops before changing
-#      anything when the plan removes a protected package (ssh, nftables, nginx,
-#      systemd, sudo...) or more than CASAVPN_OS_UPGRADE_MAX_REMOVE packages
-#   4. apt-get full-upgrade, non-interactive, keeping every config file we changed
-#      (--force-confold: the nftables, sshd and nginx files stay as they are)
+#      anything when the plan removes any package: a removal is a decision for
+#      the owner (it could be ssh or nftables), so it gets a warning instead
+#   4. apt-get full-upgrade --no-remove, non-interactive, keeping every config
+#      file we changed (--force-confold: the nftables, sshd and nginx files stay
+#      as they are). --no-remove makes apt abort if the lists changed after the
+#      simulation (apt-daily) and the real run would remove something after all
 #   5. reboots when anything was upgraded or the system asks for it
 #      (/run/reboot-required), unless --no-reboot or CASAVPN_OS_UPGRADE_REBOOT=never;
 #      without a reboot the post-check runs at once
@@ -38,7 +40,6 @@
 # Settings, from /etc/casavpn/casavpn.env (parsed, never sourced):
 #   CASAVPN_VPN_PORT                 the port the post-check expects a listener on
 #   CASAVPN_OS_UPGRADE_REBOOT        auto (default) or never
-#   CASAVPN_OS_UPGRADE_MAX_REMOVE    packages the plan may remove (default 3)
 #   CASAVPN_OS_UPGRADE_UNITS         more units to watch, space separated
 #   CASAVPN_OS_UPGRADE_DDNS          the DDNS command, run with --check
 #                                    (default /usr/local/bin/casavpn-ddns; none = skip)
@@ -74,8 +75,6 @@ LAST="$STATE_DIR/os-upgrade-last"
 # The units every CasaVPN host runs. A unit that is not active before the upgrade
 # is not expected after it, so a host without fail2ban or DDNS is not "failed".
 BASE_UNITS="ssh nginx x-ui nftables fail2ban casavpn-ddns.timer casavpn-alerts.timer casavpn-backup.timer"
-# Removing one of these could lock the owner out or take the VPN down.
-PROTECTED="openssh-server nftables nginx nginx-common systemd systemd-sysv sudo curl jq python3 sqlite3 ca-certificates fail2ban iproute2 certbot util-linux"
 MIN_ROOT_KB=1048576
 MIN_BOOT_KB=51200
 
@@ -188,15 +187,11 @@ preflight() {
 
 # check_plan <simulation output>: prints the refusal reason and returns 1, or 0.
 check_plan() {
-  local plan="$1" removed n p bad=""
-  removed="$(printf '%s\n' "$plan" | awk '$1 == "Remv" { print $2 }')"
+  local removed n
+  removed="$(printf '%s\n' "$1" | awk '$1 == "Remv" { print $2 }')"
   n="$(printf '%s\n' "$removed" | awk 'NF' | wc -l | tr -d ' ')"
-  for p in $removed; do
-    case " $PROTECTED " in *" ${p%%:*} "*) bad="$bad ${p%%:*}" ;; esac
-  done
-  if [ -n "$bad" ]; then printf 'the plan removes protected packages:%s' "$bad"; return 1; fi
-  if [ "$n" -gt "${CASAVPN_OS_UPGRADE_MAX_REMOVE:-3}" ]; then
-    printf 'the plan removes %s packages (limit %s): %s' "$n" "${CASAVPN_OS_UPGRADE_MAX_REMOVE:-3}" "$(printf '%s' "$removed" | tr '\n' ' ')"
+  if [ "$n" -gt 0 ]; then
+    printf 'the plan removes %s package(s): %s' "$n" "$(printf '%s' "$removed" | head -n 8 | tr '\n' ' ' | sed 's/ $//')"
     return 1
   fi
   return 0
@@ -239,7 +234,7 @@ reason=$reason" || true
 
   if [ "$count" -gt 0 ]; then
     log "apt-get full-upgrade ($count package(s))"
-    out="$(apt_env apt-get -y -q "${APT_OPTS[@]}" full-upgrade 2>&1)" || rc=$?
+    out="$(apt_env apt-get -y -q --no-remove "${APT_OPTS[@]}" full-upgrade 2>&1)" || rc=$?
     printf '%s\n' "$out" | tail -n 40
     if [ "$rc" -ne 0 ]; then
       log "full-upgrade failed (exit $rc); dpkg --configure -a to leave dpkg consistent"
@@ -287,7 +282,7 @@ checks() {
   done
   port="${CASAVPN_VPN_PORT:-443}"
   if [ -z "$(ss -Hltn "sport = :$port" 2>/dev/null)" ]; then printf 'nothing listens on the VPN port %s\n' "$port"; fi
-  if ! nft list ruleset 2>/dev/null | grep -q '^table'; then printf 'no nftables ruleset is loaded\n'; fi
+  if [ -z "$(nft list tables 2>/dev/null)" ]; then printf 'no nftables ruleset is loaded\n'; fi
   if [ -n "$(dpkg --audit 2>&1)" ]; then printf 'dpkg reports half-installed packages\n'; fi
   ddns="${CASAVPN_OS_UPGRADE_DDNS:-/usr/local/bin/casavpn-ddns}"
   if [ "$ddns" != none ] && [ -x "$ddns" ]; then
@@ -351,10 +346,9 @@ main() {
   # shellcheck source=lib/casavpn-notify.sh
   . "$lib"
   casavpn_env_load "$ENV_FILE" CASAVPN_VPN_PORT CASAVPN_RELAY_URL CASAVPN_RELAY_TOKEN NTFY_URL \
-    CASAVPN_OS_UPGRADE_REBOOT CASAVPN_OS_UPGRADE_MAX_REMOVE CASAVPN_OS_UPGRADE_UNITS CASAVPN_OS_UPGRADE_DDNS \
+    CASAVPN_OS_UPGRADE_REBOOT CASAVPN_OS_UPGRADE_UNITS CASAVPN_OS_UPGRADE_DDNS \
     || log "cannot read $ENV_FILE; using the environment only"
   case "${CASAVPN_OS_UPGRADE_REBOOT:-auto}" in auto|never) ;; *) err "CASAVPN_OS_UPGRADE_REBOOT must be auto or never"; exit 2 ;; esac
-  [[ "${CASAVPN_OS_UPGRADE_MAX_REMOVE:-3}" =~ ^[0-9]+$ ]] || { err "CASAVPN_OS_UPGRADE_MAX_REMOVE must be a number"; exit 2; }
 
   if [ "$DRY_RUN" = 1 ]; then
     CASAVPN_NOTIFY_DRY_RUN=1; export CASAVPN_NOTIFY_DRY_RUN

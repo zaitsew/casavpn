@@ -100,6 +100,7 @@ fresh; run
 rc_is "an upgrade with packages exits 0" 0
 logged "runs apt-get update first" apt.log "^update"
 logged "upgrades with --force-confold" apt.log "force-confold.*full-upgrade"
+logged "never removes during the real run" apt.log "^-y -q --no-remove"
 logged "reboots after upgrading" systemctl.log "^reboot"
 exists "leaves the post-check pending" "$FAKE/state/os-upgrade-pending"
 logged "records the units that were active" state/os-upgrade-pending "units=ssh nginx x-ui nftables"
@@ -147,15 +148,15 @@ rc_is "reboot-required alone" 0
 logged "reboots for /run/reboot-required" systemctl.log "^reboot"
 
 fresh; printf 'Inst tzdata [1] (2 x)\nRemv openssh-server [1:9.9]\n' >"$FAKE/plan"; run
-rc_is "a plan that removes a protected package is refused" 3
-said "names it" "protected packages: openssh-server"
+rc_is "a plan that removes a package is refused" 3
+said "names it" "removes 1 package(s): openssh-server"
 not_logged "nothing is upgraded" apt.log "-y.*full-upgrade"
 event "sends a warning" host.upgrade_failed warning
 not_logged "no reboot" systemctl.log "^reboot"
 
-fresh; printf 'Remv a [1]\nRemv b [1]\nRemv c [1]\nRemv d [1]\n' >"$FAKE/plan"; run
-rc_is "a plan that removes 4 packages is refused" 3
-said "gives the count" "removes 4 packages (limit 3)"
+fresh; printf 'Remv a [1]\nRemv b [1]\n' >"$FAKE/plan"; run
+rc_is "a removal-only plan is refused, not skipped as nothing to do" 3
+said "gives the count" "removes 2 package(s): a b"
 
 fresh; echo 100 >"$FAKE/upgrade_rc"; run
 rc_is "a failed full-upgrade exits 1" 1

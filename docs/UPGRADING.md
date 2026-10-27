@@ -149,9 +149,10 @@ The monthly run, in order:
 2. It records which units are active: ssh, nginx, x-ui, nftables, fail2ban, the
    CasaVPN timers, and `CASAVPN_OS_UPGRADE_UNITS`.
 3. `apt-get update`, then a simulated `full-upgrade`. It stops with nothing changed
-   when the plan removes a protected package (openssh-server, nftables, nginx,
-   systemd, sudo and a few more) or more than 3 packages.
-4. `apt-get full-upgrade` with `--force-confold`: config files we changed stay.
+   when the plan removes any package, and sends a warning: a removal is your call.
+   Run `sudo apt full-upgrade` by hand and read what it removes.
+4. `apt-get full-upgrade --no-remove --force-confold`: config files we changed stay,
+   and apt aborts rather than remove something the simulation did not show.
 5. A reboot, when anything was upgraded or `/run/reboot-required` exists.
 6. After the boot, `casavpn-os-upgrade-check.service` checks for up to 5 minutes:
    the units that were active are active again, the VPN port listens, an nftables
