@@ -50,7 +50,7 @@ chmod +x "$WORK/bin/curl"
 export PATH="$WORK/bin:$PATH"
 export FAKE_DIR="$WORK/fixtures" FAKE_CURL_LOG="$WORK/curl.log" FAKE_CURL_ARGV="$WORK/argv.log" FAKE_CURL_CONFIG="$WORK/config.log"
 mkdir -p "$FAKE_DIR"
-SECRET="tok-SECRET-0123456789"
+SECRET="tok-fake-fake-fake-fake"
 export CF_API_TOKEN="$SECRET"
 
 echo '{"success":true,"errors":[],"result":{"id":"u1","status":"active"}}' > "$FAKE_DIR/verify.json"

@@ -1,0 +1,3 @@
+[exceptions]
+gitleaks:jfrog-identity-token config/xray-core.env sha256 digest of a public Xray-core release asset, not a credential fp=0a47cf636baa
+gitleaks:jfrog-identity-token config/xray-core.env sha256 digest of a public Xray-core release asset, not a credential fp=c8afac494612

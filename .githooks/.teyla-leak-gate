@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "pre-commit": "file",
+    "pre-push": "file"
+  },
+  "hooks_path": ".githooks",
+  "hooks_path_scope": "local",
+  "hooks_path_set": true,
+  "version": 1
+}

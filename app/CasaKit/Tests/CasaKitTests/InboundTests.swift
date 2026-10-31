@@ -8,7 +8,7 @@ enum InboundSample {
     static let realityStream = """
     {"network": "tcp", "security": "reality", "externalProxy": [],
      "realitySettings": {"show": false, "xver": 0, "target": "www.example.com:443", "serverNames": ["www.example.com"],
-       "privateKey": "yK3tNn8vBq1ZcR6eHs0LxWp4UoJm2AaD9gFiTb7QeXw", "minClientVer": "", "maxClientVer": "",
+       "privateKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "minClientVer": "", "maxClientVer": "",
        "maxTimediff": 0, "shortIds": ["a1b2c3d4", "e5f60718"], "mldsa65Seed": "",
        "settings": {"publicKey": "Dm0Pu3bQ1xYb7mYk2eV9tCq4sHn8LrXa5oJfWzUiG6A", "fingerprint": "firefox", "serverName": "", "spiderX": "/", "mldsa65Verify": ""}},
      "tcpSettings": {"acceptProxyProtocol": false, "header": {"type": "none"}},
@@ -141,7 +141,7 @@ struct InboundTests {
 
     @Test func aNewInboundAsksTheKeyPairThenAdds() async throws {
         let transport = FakeTransport(
-            .ok(#"{"privateKey": "yK3tNn8vBq1ZcR6eHs0LxWp4UoJm2AaD9gFiTb7QeXw", "publicKey": "Dm0Pu3bQ1xYb7mYk2eV9tCq4sHn8LrXa5oJfWzUiG6A"}"#),
+            .ok(#"{"privateKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "publicKey": "Dm0Pu3bQ1xYb7mYk2eV9tCq4sHn8LrXa5oJfWzUiG6A"}"#),
             .ok(#"{"id": 7}"#)
         )
         var draft = RealityInboundDraft.newDraft()
@@ -163,7 +163,7 @@ struct InboundTests {
         #expect(reality["dest"] == nil)
         #expect(reality["serverNames"] as? [String] == ["www.microsoft.com"])
         #expect(reality["shortIds"] as? [String] == ["a1b2c3d4"])
-        #expect(reality["privateKey"] as? String == "yK3tNn8vBq1ZcR6eHs0LxWp4UoJm2AaD9gFiTb7QeXw")
+        #expect(reality["privateKey"] as? String == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
         let inner = try #require(reality["settings"] as? [String: Any])
         #expect(inner["publicKey"] as? String == "Dm0Pu3bQ1xYb7mYk2eV9tCq4sHn8LrXa5oJfWzUiG6A")
         #expect(inner["fingerprint"] as? String == "chrome")
@@ -176,7 +176,7 @@ struct InboundTests {
     @Test func aNewInboundWithKeysDoesNotAskForAnotherPair() async throws {
         let transport = FakeTransport(.ok())
         var draft = RealityInboundDraft.newDraft()
-        draft.privateKey = "yK3tNn8vBq1ZcR6eHs0LxWp4UoJm2AaD9gFiTb7QeXw"
+        draft.privateKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         draft.publicKey = "Dm0Pu3bQ1xYb7mYk2eV9tCq4sHn8LrXa5oJfWzUiG6A"
         try await client(transport).saveInbound(draft)
         #expect(transport.requests.map(\.path) == ["/secret-path/panel/api/inbounds/add"])
@@ -209,7 +209,7 @@ struct InboundTests {
         #expect((stream["sockopt"] as? [String: Any])?["tcpFastOpen"] as? Bool == true)
         #expect(stream["tcpSettings"] != nil)
         let reality = try #require(stream["realitySettings"] as? [String: Any])
-        #expect(reality["privateKey"] as? String == "yK3tNn8vBq1ZcR6eHs0LxWp4UoJm2AaD9gFiTb7QeXw")
+        #expect(reality["privateKey"] as? String == "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
         #expect(reality["shortIds"] as? [String] == ["a1b2c3d4"])
         #expect((reality["settings"] as? [String: Any])?["fingerprint"] as? String == "firefox")
         let sniffing = try #require((body["sniffing"] as? String).flatMap(JSONDocument.object))
@@ -226,7 +226,7 @@ struct InboundTests {
     @Test func aFailedAddIsReportedWithThePanelMessage() async {
         let transport = FakeTransport(.refused("Port 8444 is already in use"))
         var draft = RealityInboundDraft.newDraft()
-        draft.privateKey = "yK3tNn8vBq1ZcR6eHs0LxWp4UoJm2AaD9gFiTb7QeXw"
+        draft.privateKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         draft.publicKey = "Dm0Pu3bQ1xYb7mYk2eV9tCq4sHn8LrXa5oJfWzUiG6A"
         do { try await client(transport).saveInbound(draft); Issue.record("expected an error") } catch {
             #expect(error as? PanelError == .api("Port 8444 is already in use"))
@@ -237,7 +237,7 @@ struct InboundTests {
         let transport = FakeTransport()
         var draft = RealityInboundDraft.newDraft()
         draft.port = 0
-        draft.privateKey = "yK3tNn8vBq1ZcR6eHs0LxWp4UoJm2AaD9gFiTb7QeXw"
+        draft.privateKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
         draft.publicKey = "Dm0Pu3bQ1xYb7mYk2eV9tCq4sHn8LrXa5oJfWzUiG6A"
         do { try await client(transport).saveInbound(draft); Issue.record("expected an error") } catch {
             #expect(error is PanelError)
