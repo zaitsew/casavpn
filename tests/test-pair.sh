@@ -31,7 +31,7 @@ err_lacks() { if grep -qF -- "$2" <<<"$ERR"; then bad "$1 (stderr has: $2)"; els
 # --- fixtures ---------------------------------------------------------------------
 FAKE="$T/fake"; mkdir -p "$FAKE/xui" "$FAKE/bin"
 export FAKE
-TOKEN="tok_abcdefghijklmnop1234"
+TOKEN="tok_fake_fake_fake_fake"
 
 cat >"$FAKE/xui/x-ui" <<'XUI'
 #!/usr/bin/env bash
@@ -75,7 +75,7 @@ cat >"$T/casavpn.env" <<'ENV'
 CASAVPN_DOMAIN=vpn.example.com
 CASAVPN_WEB_PORT=8443
 CASAVPN_RELAY_URL=https://casavpn-monitor.example.workers.dev/
-CASAVPN_RELAY_TOKEN=hosttoken_0123456789
+CASAVPN_RELAY_TOKEN=hosttoken_fakefake
 ENV
 : >"$T/empty.env"
 CREDS="$T/panel-credentials.env"
@@ -90,7 +90,7 @@ run() {
   OUT="$(env -i PATH="$FAKE/bin:/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin" HOME="$T" \
       CASAVPN_PAIR_ALLOW_NONROOT=1 CASAVPN_ENV_FILE="$T/casavpn.env" CASAVPN_DB="$DB" \
       CASAVPN_PANEL_CREDS="$CREDS" CASAVPN_XUI_DIR="$FAKE/xui" FAKE="$FAKE" \
-      CASAVPN_RELAY_APP_TOKEN="apptoken_ABCDEF-012345" \
+      CASAVPN_RELAY_APP_TOKEN="apptoken_FAKE-FAKE" \
       ${envs[@]+"${envs[@]}"} bash "$SCRIPT" "$@" 2>"$T/err" </dev/null)"
   RC=$?
   ERR="$(cat "$T/err")"
@@ -106,10 +106,10 @@ out_has "the link starts with the app scheme" "casavpn://pair?panel="
 eq "panel = domain, web port and the base path from the database" "$(param panel)" "https://vpn.example.com:8443/abc123secret"
 eq "panelToken is the token x-ui printed" "$(param panelToken)" "$TOKEN"
 eq "relay has no trailing slash" "$(param relay)" "https://casavpn-monitor.example.workers.dev"
-eq "relayToken is the APP token" "$(param relayToken)" "apptoken_ABCDEF-012345"
+eq "relayToken is the APP token" "$(param relayToken)" "apptoken_FAKE-FAKE"
 eq "sub is the /sub/ URL on the web port" "$(param sub)" "https://vpn.example.com:8443/sub/"
 eq "the link is one line on stdout" "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "1"
-out_lacks "the host token never reaches the link" "hosttoken_0123456789"
+out_lacks "the host token never reaches the link" "hosttoken_fakefake"
 err_has "warns that the code holds secrets" "contains secrets"
 err_has "the QR is drawn on stderr" "[QR CODE]"
 eq "qrencode draws the terminal QR" "$(cat "$FAKE/qr.args" | cut -d' ' -f1-2)" "-t ANSIUTF8"
@@ -126,7 +126,7 @@ no_secret_in_argv() { # <label> <secret>...
   done
   if [ -z "$bad_one" ]; then ok "$label"; else bad "$label (found in a command line)"; fi
 }
-no_secret_in_argv "no token is in any command line (panel token, app token, link)" "$TOKEN" "apptoken_ABCDEF-012345" "casavpn://pair" "abc123secret"
+no_secret_in_argv "no token is in any command line (panel token, app token, link)" "$TOKEN" "apptoken_FAKE-FAKE" "casavpn://pair" "abc123secret"
 eq "x-ui is called once with the flags before the positional argument" "$(cat "$FAKE/xui.log")" "setting -getApiToken -tokenName casavpn-app -tokenScope admin"
 
 echo "--no-qr and a missing qrencode"
@@ -183,9 +183,9 @@ out_lacks "...and without printing a link" "casavpn://"
 run -- --yes
 rc_is "--yes replaces it" 0 0
 eq "...calling x-ui once" "$(xui_calls)" "1"
-run CASAVPN_PANEL_TOKEN=mine_0123456789abcdef --
+run CASAVPN_PANEL_TOKEN=mine_fakefakefakefake --
 rc_is "a token from the environment skips the prompt" 0 0
-eq "...and is used as is" "$(param panelToken)" "mine_0123456789abcdef"
+eq "...and is used as is" "$(param panelToken)" "mine_fakefakefakefake"
 mkdb "$DB" "/abc123secret/"
 run -- 
 rc_is "no earlier token: no confirmation needed" 0 0
@@ -223,7 +223,7 @@ eq "the web port follows casavpn.env" "$(param sub)" "https://vpn.example.com:94
 sed '/WEB_PORT/d' "$T/casavpn.env" >"$T/noport.env"
 run CASAVPN_ENV_FILE="$T/noport.env" -- --yes
 eq "the web port defaults to 8443" "$(param sub)" "https://vpn.example.com:8443/sub/"
-run CASAVPN_RELAY_APP_TOKEN=hosttoken_0123456789 -- --yes
+run CASAVPN_RELAY_APP_TOKEN=hosttoken_fakefake -- --yes
 rc_is "the host token (read from casavpn.env) is refused as the app token" 1 0
 err_has "...with the reason" "HOST token"
 eq "...before touching the token" "$(xui_calls)" "0"

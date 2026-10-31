@@ -8,7 +8,7 @@ public actor DemoPanel: PanelAPI {
     public static let host = "demo.example.com"
     public static let subscriptionBaseURL = "https://demo.example.com:2096/sub/"
     public static let realityPublicKey = "Dm0Pu3bQ1xYb7mYk2eV9tCq4sHn8LrXa5oJfWzUiG6A"
-    public static let realityPrivateKey = "yK3tNn8vBq1ZcR6eHs0LxWp4UoJm2AaD9gFiTb7QeXw"
+    public static let realityPrivateKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
     private var status: ServerStatus
     private var tick = 0
