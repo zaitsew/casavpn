@@ -97,6 +97,17 @@ ack-identity e0acebbc340c
 # (git merge --no-ff) so the merge commit keeps the project identity.
 ack-identity 98931ab2d7
 
+# Same for the GitHub merges of pull requests #15 (2026-10-27), #16 and #17
+# (2026-10-31). Reviewed by the maintainer on 2026-11-07; public history is
+# never rewritten.
+ack-identity 41b0a10c25
+ack-identity 31db350f90
+ack-identity 0dec362557
+
+# A commit message (4da25c2) links the Teyla pull request whose hook template it
+# applies. The owner handle is part of that public repository URL.
+literal zaitsew/teyla#317
+
 # The public project URLs that the App Store listing, the privacy policy and the support
 # page must name (app/store/, docs/privacy.md, docs/support.md). They contain the account
 # name that owns this public repository; only these two exact prefixes are accepted.
