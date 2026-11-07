@@ -117,6 +117,30 @@ def metadata() -> dict[str, str | None]:
     return out
 
 
+# What's New lines that say nothing (compared after lower-casing, dropping punctuation and
+# collapsing whitespace). A version after the first never goes out with one (POLICY section 15).
+GENERIC_RELEASE_NOTES = {"first release", "bug fixes and improvements", "bug fixes",
+                         "minor improvements", "performance improvements"}
+
+
+def release_notes_problem(notes: str | None) -> str | None:
+    """Why these notes cannot go on a non-first version, or None if they can."""
+    if not (notes or "").strip():
+        return "is empty"
+    if notes.strip().upper().startswith("TODO"):
+        return "starts with TODO"
+    plain = " ".join(re.sub(r"[^\w\s]", " ", notes.lower()).split())
+    if plain in GENERIC_RELEASE_NOTES:
+        return f'is generic ("{notes.strip()}")'
+    return None
+
+
+def later_version_problems() -> list[str]:
+    why = release_notes_problem(metadata().get("whatsNew"))
+    return [f"metadata/{LOCALE}/{WHATS_NEW[0]} {why}: write What's New for this version "
+            "from the changes a user would notice"] if why else []
+
+
 def lint() -> list[str]:
     """Problems in the local files. Offline; the same rules `check` and `listing` apply."""
     problems: list[str] = []
@@ -265,8 +289,10 @@ def diff(current: dict, wanted: dict) -> dict:
 
 # --- commands ------------------------------------------------------------------------
 
-def cmd_lint(_: argparse.Namespace) -> int:
+def cmd_lint(args: argparse.Namespace) -> int:
     problems = lint()
+    if args.later_version:
+        problems += later_version_problems()
     for p in problems:
         print(f"!! {p}")
     md = metadata()
@@ -338,6 +364,13 @@ def cmd_listing(asc: Asc, args: argparse.Namespace) -> int:
             print(f"!! {p}")
         print("listing: fix the files first")
         return 1
+    if not asc.is_first_release():
+        problems = later_version_problems()
+        if problems:
+            for p in problems:
+                print(f"!! {p}")
+            print("listing: not the first release, so What's New goes out; nothing was sent")
+            return 1
     md = metadata()
     changed = 0
 
@@ -657,7 +690,9 @@ COMMANDS = {"availability": cmd_availability, "listing": cmd_listing, "review": 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="command", required=True)
-    sub.add_parser("lint", help="validate app/store/ offline")
+    lint_parser = sub.add_parser("lint", help="validate app/store/ offline")
+    lint_parser.add_argument("--later-version", action="store_true",
+                             help="also require real What's New, as a version after the first does")
     sub.add_parser("check", help="what is missing before submit (read-only)")
     for name, text in (("availability", "territories: all but China mainland"),
                        ("listing", "push the metadata files"),

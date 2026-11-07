@@ -1,3 +1,1 @@
-First release.
-
-Manage your own VPN server from your iPhone: add and edit users, share links and QR codes, check server status, read logs and get alerts. Open demo mode on the first screen to try everything without a server.
+TODO: write What's New for the next version from the PRs merged since 1.0.0 (2)
