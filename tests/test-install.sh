@@ -160,7 +160,12 @@ OUT="$("$INSTALL" --env "$T/ok.env" 2>&1)"; RC=$?
 expect "a real run without root refuses" 1 "run as root"
 
 echo "install.sh generated configs (--show)"
-show() { OUT="$("$INSTALL" --show "$1" --env "$2" 2>/dev/null)"; RC=$?; }
+# The default for the Tailscale rules is "if the tailscale command exists", so the
+# default case runs with every PATH entry that holds a tailscale binary removed:
+# the result must not depend on what the test machine has installed.
+NO_TS_PATH="$(printf '%s\n' "$PATH" | tr ':' '\n' | while IFS= read -r d; do [ -n "$d" ] && [ ! -x "$d/tailscale" ] && printf '%s:' "$d"; done)"
+NO_TS_PATH="${NO_TS_PATH%:}"
+show() { OUT="$(PATH="$NO_TS_PATH" "$INSTALL" --show "$1" --env "$2" 2>/dev/null)"; RC=$?; }
 show nftables "$T/ok.env"
 expect "nftables: own table, no global flush" 0 "table inet casavpn"
 lacks  "  ...never flushes the whole ruleset" "^flush ruleset"
