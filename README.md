@@ -13,10 +13,11 @@ monitor, all installed by one script.
    Cloudflare DNS ◄── casavpn-ddns (every minute)      Cloudflare Worker ──► your phone (ntfy)
 ```
 
-> **Status: 0.1.0, a first release.** Every script is covered by offline tests with
-> fake system tools. `install.sh` has **not** yet been run end to end on a clean
-> Raspberry Pi. Do your first install with the Pi in reach, and read the
-> [CHANGELOG](CHANGELOG.md) for what is verified and what is not.
+> **Status.** The iPhone app is 1.0.0 (build 2), on TestFlight only. The server kit has no
+> tagged release yet; its changes are under "Unreleased" in the [CHANGELOG](CHANGELOG.md).
+> Every script is covered by offline tests with fake system tools. `install.sh` has **not**
+> yet been run end to end on a clean Raspberry Pi. Do your first install with the Pi in
+> reach, and read the CHANGELOG for what is verified and what is not.
 
 ## Quick start
 
@@ -45,7 +46,7 @@ The long version, with prerequisites: [docs/QUICKSTART.md](docs/QUICKSTART.md).
 | **Defaults that protect you** | VPN clients cannot reach your LAN; BitTorrent is blocked; the healthcheck fails if either rule disappears |
 | **Tested without a Pi** | ~480 offline test assertions, shellcheck-clean, plus a scanner that keeps personal data out of the repository |
 
-An iPhone app (status, clients, push alerts) lives in [app/](app/README.md); its design is [docs/APP.md](docs/APP.md).
+An iPhone app (server status, inbounds and clients, share links with QR, push alerts, demo mode) lives in [app/](app/README.md); its design is [docs/APP.md](docs/APP.md).
 
 ## Requirements
 
@@ -66,6 +67,9 @@ Not for you if you only need a quick VPN on a network that does not block VPNs
 | `casavpn-backup` | encrypted backup now |
 | `casavpn-minver [--check]` | set / verify the minimum client version |
 | `casavpn-upgrade` / `casavpn-rollback` | move 3x-ui to the pinned release / undo it |
+| `casavpn-alerts [--dry-run]` | one pass of host alerts (certificate, traffic, backups, disk, reboot) to the relay and ntfy; a timer runs it every 15 minutes |
+| `casavpn-pair [--yes]` | print the pairing link and QR code for the iPhone app |
+| `casavpn-os-upgrade [--dry-run] [--no-reboot]` | the monthly OS upgrade with a reboot and a post-check; a timer runs it |
 
 | On your laptop | |
 |---|---|

@@ -44,7 +44,7 @@ scripts/store.py age-rating        # the age-rating questionnaire, all "none"  (
 
 Order for the first release: `availability`, `age-rating`, `listing`, `review`, then `check`
 until it prints `0 item(s) missing`. "What's New" is skipped on a first release: Apple does not
-take it. `release_notes.txt` is used from 1.1 on.
+take it. `release_notes.txt` is used from 1.1 on. `scripts/store.py listing` refuses (nothing sent) when it is empty, starts with TODO, or is a generic line such as "First release." or "Bug fixes and improvements"; `lint --later-version` checks the same offline.
 
 ## Upload a build
 
@@ -95,6 +95,19 @@ cannot go into version 1.0.
 | 2.1 App completeness | The reviewer has no server or account. | Demo mode; no account exists. |
 | 5.2.1 / 2.3.7 Third-party names | "3x-ui" in the description. | Named once, as compatibility. Not in the name, subtitle or keywords. "Xray" is not used. |
 | 5.1.1 Privacy | Camera and notification prompts. | Usage text states the purpose; both are optional. |
+
+## Screenshots to retake
+
+`app/store/screenshots-draft/` (commit f0fc172, 2026-10-23, from demo mode, 6.9 inch, light) was
+taken before three UI commits. Retake the screens each one changed, with the same demo script:
+
+| Screens | Changed by |
+|---|---|
+| Sign-in and sign-out flow, Settings | 36d3567 (cancel, honest Keychain errors), ffc06b1 (sign-out wipe, re-auth sheet that cannot be swiped away) |
+| Clients, inbound list, client detail | 2b4e6f4 (ordered inbound refresh, client detail reloads after each change) |
+
+Retake all five (`01-status` to `05-settings`) so the set stays consistent. Not retaken in this
+change: no builds or simulators were run.
 
 ## Needs the website (the API has no endpoint)
 

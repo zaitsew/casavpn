@@ -48,5 +48,16 @@ lint "$T/store"; rc_is "a missing file fails" 1
 fresh; rm "$T/store/review_notes.txt"
 lint "$T/store"; rc_is "missing review notes fail" 1
 
+echo "-- What's New on a later version"
+lintv() { OUT="$(CASAVPN_STORE_DIR="$1" python3 -I "$SCRIPT" lint --later-version 2>&1)"; RC=$?; }
+fresh; lintv "$T/store"; rc_is "First release. is refused on a later version" 1; out_has "says which file" "release_notes.txt"
+for generic in "" "TODO: write it" "Bug fixes and improvements" "  bug FIXES.  " "Minor improvements!" "Performance   improvements"; do
+  fresh; printf '%s\n' "$generic" >"$MD/release_notes.txt"
+  lintv "$T/store"; rc_is "refused: '${generic}'" 1
+done
+fresh; printf 'Adds a Status tab with Xray controls and a log.\n' >"$MD/release_notes.txt"
+lintv "$T/store"; rc_is "real notes pass on a later version" 0
+fresh; lint "$T/store"; rc_is "the first release still lints without --later-version" 0
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
