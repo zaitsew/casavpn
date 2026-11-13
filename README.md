@@ -3,7 +3,7 @@
 A home VPN on a Raspberry Pi that you can rebuild in an afternoon and trust to
 look after itself. VLESS + Reality (3x-ui / Xray) behind a default-deny firewall,
 with a dynamic-IP updater, encrypted backups, a healthcheck and an external
-monitor, all installed by one script.
+monitor, all installed by one script. An iPhone app manages the server and shows push alerts.
 
 ```
  phone / laptop ──443──►  router  ──►  Raspberry Pi
@@ -13,7 +13,8 @@ monitor, all installed by one script.
    Cloudflare DNS ◄── casavpn-ddns (every minute)      Cloudflare Worker ──► your phone (ntfy)
 ```
 
-> **Status.** The iPhone app is 1.0.0 (build 2), on TestFlight only. The server kit has no
+> **Status.** The iPhone app is 1.0.0 (build 2), on TestFlight only; it is not on the App
+> Store and no App Store submission is open ([docs/APP-STORE.md](docs/APP-STORE.md)). The server kit has no
 > tagged release yet; its changes are under "Unreleased" in the [CHANGELOG](CHANGELOG.md).
 > Every script is covered by offline tests with fake system tools. `install.sh` has **not**
 > yet been run end to end on a clean Raspberry Pi. Do your first install with the Pi in
@@ -46,7 +47,7 @@ The long version, with prerequisites: [docs/QUICKSTART.md](docs/QUICKSTART.md).
 | **Defaults that protect you** | VPN clients cannot reach your LAN; BitTorrent is blocked; the healthcheck fails if either rule disappears |
 | **Tested without a Pi** | ~480 offline test assertions, shellcheck-clean, plus a scanner that keeps personal data out of the repository |
 
-An iPhone app (server status, inbounds and clients, share links with QR, push alerts, demo mode) lives in [app/](app/README.md); its design is [docs/APP.md](docs/APP.md).
+The iPhone app has five tabs: Status (Xray controls and log), Inbounds, Clients (share links with QR), Alerts and Settings. It also has a demo mode and no analytics. It lives in [app/](app/README.md); its design is [docs/APP.md](docs/APP.md).
 
 ## Requirements
 
@@ -83,7 +84,7 @@ Not for you if you only need a quick VPN on a network that does not block VPNs
 
 [Quick start](docs/QUICKSTART.md) · [Architecture](docs/ARCHITECTURE.md) ·
 [Hardening and panel access](docs/HARDENING.md) · [Security model](docs/SECURITY-MODEL.md) ·
-[Clients](docs/CLIENTS.md) · [Dynamic IP](docs/DYNAMIC-IP.md) · [Backup and restore](docs/BACKUP.md) ·
+[iPhone app](docs/APP.md) · [Clients](docs/CLIENTS.md) · [Dynamic IP](docs/DYNAMIC-IP.md) · [Backup and restore](docs/BACKUP.md) ·
 [Upgrading](docs/UPGRADING.md) · [Monitoring](docs/MONITORING.md) · [DNS migration](docs/DNS-MIGRATION.md) ·
 [Reality target](docs/REALITY-TARGET.md) · [Runbook](docs/RUNBOOK.md) · [FAQ](docs/FAQ.md) · [Legal](docs/LEGAL.md)
 
@@ -94,7 +95,8 @@ install.sh              the installer (--dry-run, --show <config>, --skip-<step>
 casavpn.env.example     every setting, documented
 scripts/                tools installed to /usr/local/bin, and laptop-side helpers (scripts/lib/ shared code)
 config/                 templates: nftables, nginx, sshd, fail2ban, systemd, launchd, DNS examples, 3x-ui pin
-monitor/                the external uptime monitor (Cloudflare Worker, TypeScript)
+app/                    the iPhone app (SwiftUI) and its store listing text
+monitor/                the external uptime monitor and the app's alert relay (Cloudflare Worker, TypeScript)
 tests/                  offline tests with fake systemctl/nft/sshd/dig/curl on PATH
 tools/                  the personal-data scanner
 docs/                   the manual
@@ -110,3 +112,5 @@ before you invite anyone.
 ## License
 
 MIT, see [LICENSE](LICENSE). 3x-ui and Xray are separate projects under their own licenses.
+
+<!-- teyla:reviewed 2026-11-13 -->
