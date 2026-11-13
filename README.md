@@ -112,3 +112,5 @@ before you invite anyone.
 ## License
 
 MIT, see [LICENSE](LICENSE). 3x-ui and Xray are separate projects under their own licenses.
+
+<!-- teyla:reviewed 2026-11-13 -->
