@@ -1,0 +1,26 @@
+{
+  "name": "CasaVPN",
+  "tagline": "A home VPN on a Raspberry Pi that looks after itself.",
+  "summary": "VLESS + Reality behind a default-deny firewall, installed by one script, with an iPhone app.",
+  "accent": "#176BB0",
+  "accent_dark": "#4AA3FA",
+  "status": "building",
+  "kind": "infra",
+  "platforms": ["Linux (Raspberry Pi)", "iOS"],
+  "pills": ["Open source", "No analytics"],
+  "highlights": [
+    {"label": "STEALTH", "title": "Looks like a real website", "text": "VLESS + Reality: a probe sees a genuine certificate, never a VPN."},
+    {"label": "CLOSED", "title": "Default-deny firewall", "text": "nftables, LAN-only key SSH, fail2ban, panel behind nginx."},
+    {"label": "DYNAMIC IP", "title": "Follows your changing IP", "text": "casavpn-ddns fixes your DNS record every minute and alerts."},
+    {"label": "BACKUPS", "title": "Backups you have restored", "text": "Nightly age-encrypted archive and a restore drill that proves it."},
+    {"label": "UPGRADES", "title": "Upgrades that roll back", "text": "3x-ui pinned by SHA-256; backup first, automatic rollback."},
+    {"label": "ALERTS", "title": "You hear first", "text": "Healthcheck, external monitor and push alerts to your phone."}
+  ],
+  "steps": [
+    {"title": "Dry run", "text": "Creates casavpn.env, then stops."},
+    {"title": "Configure", "text": "Domain, LAN range, Cloudflare token, age key."},
+    {"title": "Install", "text": "One script sets up every layer."},
+    {"title": "Add clients", "text": "Create the Reality inbound in the panel."},
+    {"title": "Forward ports", "text": "443 and 8443 only; test on mobile data."}
+  ]
+}
