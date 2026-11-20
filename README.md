@@ -1,17 +1,11 @@
-# CasaVPN
+<!-- Pictures: docs/readme/spec.json, drawn by readme-kit. Do not edit the SVGs by hand. -->
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme/hero-dark.svg"><img src="docs/readme/hero-light.svg" alt="CasaVPN: a home VPN on a Raspberry Pi that looks after itself. VLESS + Reality behind a default-deny firewall, installed by one script, with an iPhone app. Building, infrastructure, Linux (Raspberry Pi) and iOS, open source, no analytics." width="100%"></picture>
 
-A home VPN on a Raspberry Pi that you can rebuild in an afternoon and trust to
-look after itself. VLESS + Reality (3x-ui / Xray) behind a default-deny firewall,
-with a dynamic-IP updater, encrypted backups, a healthcheck and an external
-monitor, all installed by one script. An iPhone app manages the server and shows push alerts.
+**Rebuild your whole VPN in an afternoon: one script installs the server, firewall, backups and monitoring.**
 
-```
- phone / laptop ──443──►  router  ──►  Raspberry Pi
-                                         ├─ Xray (Reality)        the VPN; strangers see a real website
-                                         └─ nginx :8443           /sub/ for client profiles (public)
-                                                                  the panel (LAN / Tailscale only)
-   Cloudflare DNS ◄── casavpn-ddns (every minute)      Cloudflare Worker ──► your phone (ntfy)
-```
+CasaVPN runs VLESS + Reality (3x-ui / Xray) on a Raspberry Pi, with a dynamic-IP updater, an external monitor and an iPhone app. It is for people who run a server at home and want to hear about problems first.
+
+[Quick start](docs/QUICKSTART.md) · [iPhone app](app/README.md) · [Changelog](CHANGELOG.md) · [Docs](#docs)
 
 > **Status.** The iPhone app is 1.0.0 (build 2), on TestFlight only; it is not on the App
 > Store and no App Store submission is open ([docs/APP-STORE.md](docs/APP-STORE.md)). The server kit has no
@@ -19,6 +13,42 @@ monitor, all installed by one script. An iPhone app manages the server and shows
 > Every script is covered by offline tests with fake system tools. `install.sh` has **not**
 > yet been run end to end on a clean Raspberry Pi. Do your first install with the Pi in
 > reach, and read the CHANGELOG for what is verified and what is not.
+
+<p align="center">
+<img src="app/store/screenshots-draft/01-status.png" alt="Status tab: the VPN is up, CPU, memory, disk and uptime of the server (demo data)" width="23%">
+<img src="app/store/screenshots-draft/02-inbounds.png" alt="Inbounds tab: a VLESS Reality inbound and a Shadowsocks inbound with traffic and client counts (demo data)" width="23%">
+<img src="app/store/screenshots-draft/03-clients.png" alt="Clients tab: clients with traffic, expiry and online state (demo data)" width="23%">
+<img src="app/store/screenshots-draft/04-alerts.png" alt="Alerts tab: traffic, expiry, disk and VPN up or down alerts (demo data)" width="23%">
+</p>
+
+## What it does
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme/highlights-dark.svg"><img src="docs/readme/highlights-light.svg" alt="Six highlights. Stealth: VLESS + Reality, a probe sees a genuine certificate, never a VPN. Closed: nftables default-deny, LAN-only key SSH, fail2ban, panel behind nginx. Dynamic IP: casavpn-ddns fixes your DNS record every minute and alerts. Backups: nightly age-encrypted archive and a restore drill. Upgrades: 3x-ui pinned by SHA-256, backup first, automatic rollback. Alerts: healthcheck, external monitor and push alerts." width="100%"></picture>
+
+- **Panel access.** The panel stays on loopback behind nginx: reachable from LAN, Tailscale or one VPN identity.
+- **Four IP sources.** `casavpn-ddns` reads the record back after each change.
+- **Certificates without port 80.** Let's Encrypt by DNS-01 through Cloudflare.
+- **Minimum client version.** Re-asserted after every upgrade.
+- **Safe defaults.** VPN clients cannot reach your LAN; BitTorrent is blocked; the healthcheck fails if either rule disappears.
+- **Healthcheck.** `casavpn-healthcheck` runs on the host and remotely; an external Cloudflare Worker watches from outside; ntfy pushes.
+- **Tested without a Pi.** About 480 offline test assertions, shellcheck-clean, plus a scanner that keeps personal data out of the repository.
+- **iPhone app.** Five tabs: Status (Xray controls and log), Inbounds, Clients (share links with QR), Alerts and Settings. It has a demo mode and no analytics. See [app/](app/README.md) and [docs/APP.md](docs/APP.md).
+
+## How it works
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/readme/steps-dark.svg"><img src="docs/readme/steps-light.svg" alt="Five steps: dry run creates casavpn.env then stops; configure domain, LAN range, Cloudflare token and age key; install with one script; add clients by creating the Reality inbound in the panel; forward ports 443 and 8443 only and test on mobile data." width="100%"></picture>
+
+```mermaid
+flowchart LR
+    client["phone / laptop"] -->|443| router["router"]
+    router --> pi
+    subgraph pi["Raspberry Pi"]
+        xray["Xray (Reality)<br/>the VPN; strangers see a real website"]
+        nginx["nginx :8443<br/>/sub/ for client profiles (public)<br/>the panel (LAN / Tailscale only)"]
+    end
+    ddns["casavpn-ddns (every minute)"] --> dns["Cloudflare DNS"]
+    worker["Cloudflare Worker"] --> phone["your phone (ntfy)"]
+```
 
 ## Quick start
 
@@ -31,23 +61,7 @@ sudo ./install.sh                               # 3. installs; prints the one pa
 # 5. forward ONLY the VPN port (443) and the web port (8443) on your router, test from mobile data
 ```
 
-The long version, with prerequisites: [docs/QUICKSTART.md](docs/QUICKSTART.md).
-
-## What you get
-
-| | |
-|---|---|
-| **Stealth transport** | VLESS + Reality: a probe sees the genuine certificate of a real site, never a VPN |
-| **Closed by default** | nftables default-deny; SSH from the LAN only; key-only SSH; fail2ban; the panel on loopback behind nginx, reachable from LAN, Tailscale or one VPN identity |
-| **Survives a changing IP** | `casavpn-ddns` reconciles your DNS record every minute from four IP sources, reads it back, and pushes an alert |
-| **Certificates without port 80** | Let's Encrypt by DNS-01 through Cloudflare |
-| **Backups you have restored** | nightly age-encrypted archive, pull to another machine, a restore drill that proves it |
-| **Safe upgrades** | the 3x-ui release is pinned by SHA-256; `casavpn-upgrade` backs up first and rolls back by itself; the minimum client version is re-asserted |
-| **You hear first** | `casavpn-healthcheck` (host and remote), an external Cloudflare Worker monitor, ntfy pushes |
-| **Defaults that protect you** | VPN clients cannot reach your LAN; BitTorrent is blocked; the healthcheck fails if either rule disappears |
-| **Tested without a Pi** | ~480 offline test assertions, shellcheck-clean, plus a scanner that keeps personal data out of the repository |
-
-The iPhone app has five tabs: Status (Xray controls and log), Inbounds, Clients (share links with QR), Alerts and Settings. It also has a demo mode and no analytics. It lives in [app/](app/README.md); its design is [docs/APP.md](docs/APP.md).
+First-run check: `sudo casavpn-healthcheck --local`. The long version, with prerequisites: [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
 ## Requirements
 
@@ -59,7 +73,8 @@ The iPhone app has five tabs: Status (Xray controls and log), Inbounds, Clients 
 Not for you if you only need a quick VPN on a network that does not block VPNs
 (plain WireGuard is simpler), or if your line is CGNAT or IPv6-only ([FAQ](docs/FAQ.md)).
 
-## Commands
+<details>
+<summary>Commands (on the Pi and on your laptop)</summary>
 
 | On the Pi | |
 |---|---|
@@ -80,15 +95,10 @@ Not for you if you only need a quick VPN on a network that does not block VPNs
 | `scripts/cf-api.sh`, `scripts/dns-diff.sh` | Cloudflare helper, DNS migration checks |
 | `./check.sh` | shellcheck, tests, personal-data scan (the gate; there is no CI) |
 
-## Documentation
+</details>
 
-[Quick start](docs/QUICKSTART.md) · [Architecture](docs/ARCHITECTURE.md) ·
-[Hardening and panel access](docs/HARDENING.md) · [Security model](docs/SECURITY-MODEL.md) ·
-[iPhone app](docs/APP.md) · [Clients](docs/CLIENTS.md) · [Dynamic IP](docs/DYNAMIC-IP.md) · [Backup and restore](docs/BACKUP.md) ·
-[Upgrading](docs/UPGRADING.md) · [Monitoring](docs/MONITORING.md) · [DNS migration](docs/DNS-MIGRATION.md) ·
-[Reality target](docs/REALITY-TARGET.md) · [Runbook](docs/RUNBOOK.md) · [FAQ](docs/FAQ.md) · [Legal](docs/LEGAL.md)
-
-## Layout
+<details>
+<summary>Repository layout</summary>
 
 ```
 install.sh              the installer (--dry-run, --show <config>, --skip-<step>)
@@ -102,6 +112,29 @@ tools/                  the personal-data scanner
 docs/                   the manual
 check.sh                the local gate
 ```
+
+</details>
+
+## Docs
+
+| Document | What is in it |
+|---|---|
+| [Quick start](docs/QUICKSTART.md) | Install, step by step, with prerequisites |
+| [Architecture](docs/ARCHITECTURE.md) | How the parts fit together |
+| [Hardening and panel access](docs/HARDENING.md) | Firewall, SSH, panel exposure |
+| [Security model](docs/SECURITY-MODEL.md) | What is protected, and from whom |
+| [iPhone app](docs/APP.md) | The app's design and the relay API |
+| [App Store](docs/APP-STORE.md) | How the app reaches the App Store; review checklist |
+| [Clients](docs/CLIENTS.md) | Creating identities and connecting a device |
+| [Dynamic IP](docs/DYNAMIC-IP.md) | The DNS updater |
+| [Backup and restore](docs/BACKUP.md) | Encrypted backups and the restore drill |
+| [Upgrading](docs/UPGRADING.md) | Pinned 3x-ui, upgrade and rollback |
+| [Monitoring](docs/MONITORING.md) | Healthcheck, external monitor, alerts |
+| [DNS migration](docs/DNS-MIGRATION.md) | Moving DNS to Cloudflare |
+| [Reality target](docs/REALITY-TARGET.md) | Choosing the site Reality imitates |
+| [Runbook](docs/RUNBOOK.md) | What to do when something breaks |
+| [FAQ](docs/FAQ.md) | Common questions and limits |
+| [Legal](docs/LEGAL.md) | Responsible use and what to think about first |
 
 ## Responsible use
 
