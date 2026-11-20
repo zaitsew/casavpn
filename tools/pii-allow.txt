@@ -105,6 +105,9 @@ ack-identity 31db350f90
 ack-identity 0dec362557
 # The merge of #18 (2026-11-07) went through the button by mistake; merge locally.
 ack-identity 230170b0a3
+# Same for the GitHub merge of pull request #20 on 2026-11-13. Acknowledged by
+# the maintainer on 2026-11-20; public history is never rewritten. Merge locally.
+ack-identity 3e08fad636
 
 # A commit message (4da25c2) links the Teyla pull request whose hook template it
 # applies. The owner handle is part of that public repository URL.
