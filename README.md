@@ -146,4 +146,6 @@ before you invite anyone.
 
 MIT, see [LICENSE](LICENSE). 3x-ui and Xray are separate projects under their own licenses.
 
+<sub>Traffic enters the grid on port 443. End of line.</sub>
+
 <!-- teyla:reviewed 2026-11-13 -->
